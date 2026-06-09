@@ -166,6 +166,9 @@ async function ensurePlayer() {
     width: "100%",
     playerVars: {
       playsinline: 1,
+      controls: 0,
+      disablekb: 1,
+      fs: 0,
       rel: 0,
       modestbranding: 1,
       origin: location.origin
