@@ -1,0 +1,628 @@
+const $ = (selector) => document.querySelector(selector);
+
+function getTabParticipantId() {
+  if (!window.name.startsWith("cozyAux:")) {
+    window.name = `cozyAux:${crypto.randomUUID()}`;
+  }
+  return window.name.slice("cozyAux:".length);
+}
+
+function resetTabParticipantId() {
+  window.name = `cozyAux:${crypto.randomUUID()}`;
+  return window.name.slice("cozyAux:".length);
+}
+
+const els = {
+  setupView: $("#setupView"),
+  roomView: $("#roomView"),
+  createForm: $("#createForm"),
+  joinForm: $("#joinForm"),
+  createName: $("#createName"),
+  joinName: $("#joinName"),
+  joinCode: $("#joinCode"),
+  connectionStatus: $("#connectionStatus"),
+  roomCode: $("#roomCode"),
+  copyCodeButton: $("#copyCodeButton"),
+  copyInviteButton: $("#copyInviteButton"),
+  participants: $("#participants"),
+  auxLabel: $("#auxLabel"),
+  syncStatus: $("#syncStatus"),
+  mediaTitle: $("#mediaTitle"),
+  mediaMeta: $("#mediaMeta"),
+  artwork: $("#artwork"),
+  audioArtwork: $("#audioArtwork"),
+  playerMount: $("#playerMount"),
+  seekSlider: $("#seekSlider"),
+  elapsed: $("#elapsed"),
+  duration: $("#duration"),
+  playButton: $("#playButton"),
+  pauseButton: $("#pauseButton"),
+  mediaForm: $("#mediaForm"),
+  mediaInput: $("#mediaInput"),
+  videoModeButton: $("#videoModeButton"),
+  audioModeButton: $("#audioModeButton"),
+  chatCount: $("#chatCount"),
+  chatMessages: $("#chatMessages"),
+  chatForm: $("#chatForm"),
+  chatInput: $("#chatInput"),
+  message: $("#message")
+};
+
+const state = {
+  participantId: getTabParticipantId(),
+  name: localStorage.getItem("cozyAuxName") || "",
+  room: null,
+  events: null,
+  player: null,
+  playerReady: false,
+  appliedMediaId: null,
+  suppressPlayerEventsUntil: 0,
+  displayMode: localStorage.getItem("cozyAuxDisplayMode") || "video",
+  isSeeking: false,
+  lastSeekCommitAt: 0,
+  lastRenderedMessageId: "",
+  pendingRoomCode: ""
+};
+
+function setMessage(message) {
+  els.message.textContent = message || "";
+}
+
+function formatSec(seconds = 0) {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(totalSeconds / 60);
+  const secs = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${secs}`;
+}
+
+function currentPosition(playback) {
+  if (!playback?.media) return 0;
+  if (!playback.isPlaying || !playback.startedAt) return playback.positionSec || 0;
+  return Math.max(0, (Date.now() - playback.startedAt) / 1000);
+}
+
+function isAuxHolder() {
+  return state.room?.auxHolderId === state.participantId;
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "content-type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Request failed.");
+  return data;
+}
+
+function extractYouTubeVideoId(value) {
+  const input = value.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
+
+  try {
+    const url = new URL(input);
+    const host = url.hostname.replace(/^www\./, "");
+    if (host === "youtu.be") return url.pathname.split("/").filter(Boolean)[0] || "";
+    if (host.endsWith("youtube.com") || host.endsWith("music.youtube.com")) {
+      if (url.pathname === "/watch") return url.searchParams.get("v") || "";
+      if (url.pathname.startsWith("/shorts/")) return url.pathname.split("/")[2] || "";
+      if (url.pathname.startsWith("/embed/")) return url.pathname.split("/")[2] || "";
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
+}
+
+function normalizeMedia(value) {
+  const videoId = extractYouTubeVideoId(value);
+  if (!videoId) return null;
+  return {
+    provider: "youtube",
+    videoId,
+    url: `https://www.youtube.com/watch?v=${videoId}`,
+    title: "YouTube link",
+    sourceLabel: value.includes("music.youtube.com") ? "YouTube Music" : "YouTube",
+    thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+  };
+}
+
+async function enrichMedia(media) {
+  const data = await api(`/api/youtube/meta?videoId=${encodeURIComponent(media.videoId)}`).catch(
+    () => ({ meta: null })
+  );
+  if (!data.meta) return media;
+  return {
+    ...media,
+    title: data.meta.title || media.title,
+    authorName: data.meta.authorName || "",
+    thumbnailUrl: data.meta.thumbnailUrl || media.thumbnailUrl
+  };
+}
+
+function loadYouTubeApi() {
+  if (window.YT?.Player) return Promise.resolve();
+  return new Promise((resolve) => {
+    const previous = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      if (typeof previous === "function") previous();
+      resolve();
+    };
+    const script = document.createElement("script");
+    script.src = "https://www.youtube.com/iframe_api";
+    document.head.append(script);
+  });
+}
+
+async function ensurePlayer() {
+  await loadYouTubeApi();
+  if (state.player) return state.player;
+  state.player = new YT.Player("playerMount", {
+    height: "100%",
+    width: "100%",
+    playerVars: {
+      playsinline: 1,
+      rel: 0,
+      modestbranding: 1,
+      origin: location.origin
+    },
+    events: {
+      onReady: () => {
+        state.playerReady = true;
+        if (state.room?.playback?.media) {
+          applyPlayback(null, state.room.playback);
+        }
+        render();
+      },
+      onStateChange: handlePlayerStateChange
+    }
+  });
+  return state.player;
+}
+
+function handlePlayerStateChange(event) {
+  if (Date.now() < state.suppressPlayerEventsUntil || !state.room?.playback?.media) return;
+  const playerState = window.YT?.PlayerState;
+  if (!playerState) return;
+
+  if (event.data === playerState.PLAYING) {
+    command("play", { positionSec: state.player.getCurrentTime() });
+  } else if (event.data === playerState.PAUSED) {
+    command("pause", { positionSec: state.player.getCurrentTime() });
+  }
+}
+
+async function createRoom(event) {
+  event.preventDefault();
+  state.name = els.createName.value.trim() || "Host";
+  localStorage.setItem("cozyAuxName", state.name);
+  const data = await api("/api/rooms", {
+    method: "POST",
+    body: JSON.stringify({ name: state.name, participantId: state.participantId })
+  });
+  enterRoom(data.room);
+}
+
+async function joinRoom(event) {
+  event.preventDefault();
+  state.name = els.joinName.value.trim() || "Listener";
+  localStorage.setItem("cozyAuxName", state.name);
+  const code = els.joinCode.value.trim().toUpperCase();
+  const data = await api(`/api/rooms/${code}/join`, {
+    method: "POST",
+    body: JSON.stringify({ name: state.name, participantId: state.participantId })
+  });
+  enterRoom(data.room);
+}
+
+function enterRoom(room) {
+  state.room = {
+    ...room,
+    participants: room.participants.map((person) =>
+      person.id === state.participantId ? { ...person, online: true } : person
+    )
+  };
+  history.replaceState(
+    null,
+    "",
+    `/?room=${room.code}&participant=${encodeURIComponent(state.participantId)}`
+  );
+  els.setupView.classList.add("hidden");
+  els.roomView.classList.remove("hidden");
+  ensurePlayer();
+  openEvents();
+  render();
+}
+
+function openEvents() {
+  if (state.events) state.events.close();
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  state.events = new WebSocket(
+    `${protocol}://${location.host}/ws/rooms/${state.room.code}?participantId=${state.participantId}`
+  );
+  state.events.addEventListener("open", () => {
+    els.connectionStatus.textContent = "Live";
+  });
+  state.events.addEventListener("close", () => {
+    els.connectionStatus.textContent = "Reconnecting";
+    if (state.room) setTimeout(openEvents, 700);
+  });
+  state.events.addEventListener("error", () => {
+    els.connectionStatus.textContent = "Reconnecting";
+  });
+  state.events.addEventListener("message", async (event) => {
+    const message = JSON.parse(event.data);
+    const eventName = message.event;
+    const nextRoom = message.data;
+    const previousPlayback = state.room?.playback;
+    const canAffectPlayback = !["aux-transfer", "presence", "chat-send", "room"].includes(eventName);
+    const playbackChanged =
+      canAffectPlayback &&
+      (previousPlayback?.updatedAt !== nextRoom.playback?.updatedAt ||
+        previousPlayback?.media?.videoId !== nextRoom.playback?.media?.videoId ||
+        previousPlayback?.isPlaying !== nextRoom.playback?.isPlaying);
+    state.room = nextRoom;
+    render();
+    if (playbackChanged) {
+      await applyPlayback(previousPlayback, nextRoom.playback);
+    }
+  });
+}
+
+async function command(type, payload = {}) {
+  if (!state.room) return;
+  try {
+    return await api(`/api/rooms/${state.room.code}/commands`, {
+      method: "POST",
+      body: JSON.stringify({
+        type,
+        participantId: state.participantId,
+        ...payload
+      })
+    });
+  } catch (error) {
+    setMessage(error.message);
+    return null;
+  }
+}
+
+async function applyPlayback(previous, playback) {
+  if (!state.playerReady || !playback?.media) return;
+  const player = await ensurePlayer();
+  const nextPosition = currentPosition(playback);
+  const mediaChanged = previous?.media?.videoId !== playback.media.videoId;
+
+  state.suppressPlayerEventsUntil = Date.now() + 1200;
+  if (mediaChanged || state.appliedMediaId !== playback.media.videoId) {
+    state.appliedMediaId = playback.media.videoId;
+    player.loadVideoById(playback.media.videoId, nextPosition);
+  } else {
+    const actual = player.getCurrentTime?.() || 0;
+    if (Math.abs(actual - nextPosition) > 1.2) {
+      player.seekTo(nextPosition, true);
+    }
+  }
+
+  if (playback.isPlaying) {
+    player.playVideo();
+  } else {
+    player.pauseVideo();
+  }
+}
+
+async function submitMedia(event) {
+  event.preventDefault();
+  if (!isAuxHolder()) {
+    setMessage("Only the aux holder can change the link.");
+    return;
+  }
+  const media = normalizeMedia(els.mediaInput.value);
+  if (!media) {
+    setMessage("Paste a valid YouTube or YouTube Music link.");
+    return;
+  }
+  setMessage("Loading link...");
+  await command("media-change", { media: await enrichMedia(media) });
+  setMessage("");
+}
+
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>"']/g, (char) => {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char];
+  });
+}
+
+function renderMessages(messages = []) {
+  const lastMessage = messages.at(-1);
+  if (state.lastRenderedMessageId === (lastMessage?.id || "") && els.chatMessages.childElementCount === messages.length) {
+    return;
+  }
+  state.lastRenderedMessageId = lastMessage?.id || "";
+  els.chatCount.textContent = String(messages.length);
+  els.chatMessages.innerHTML = "";
+  for (const message of messages) {
+    const row = document.createElement("div");
+    row.className = `chat-message${message.participantId === state.participantId ? " own" : ""}${
+      message.system ? " system" : ""
+    }`;
+    const time = new Date(message.sentAt).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit"
+    });
+    row.innerHTML = `
+      <div class="chat-meta">
+        <strong>${escapeHtml(message.name)}</strong>
+        <span>${escapeHtml(time)}</span>
+      </div>
+      <p>${escapeHtml(message.text)}</p>
+    `;
+    els.chatMessages.append(row);
+  }
+  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+}
+
+function addLocalSystemMessage(text) {
+  if (!state.room) return;
+  state.room = {
+    ...state.room,
+    messages: [
+      ...(state.room.messages || []),
+      {
+        id: `local-${Date.now()}`,
+        participantId: "system",
+        name: "Cozy Aux",
+        text,
+        sentAt: Date.now(),
+        system: true
+      }
+    ].slice(-100)
+  };
+}
+
+function render() {
+  const room = state.room;
+  if (!room) return;
+  els.roomCode.textContent = room.code;
+
+  const aux = room.participants.find((person) => person.id === room.auxHolderId);
+  els.auxLabel.textContent = `Aux: ${aux?.name || "--"}`;
+
+  const playback = room.playback;
+  const media = playback.media;
+  els.mediaTitle.textContent = media ? media.title : "No link selected";
+  els.mediaMeta.textContent = media
+    ? [media.sourceLabel, media.authorName, media.videoId].filter(Boolean).join(" · ")
+    : "Paste a YouTube or YouTube Music link to start.";
+  els.artwork.style.backgroundImage = media?.thumbnailUrl ? `url("${media.thumbnailUrl}")` : "";
+  els.audioArtwork.style.backgroundImage = media?.thumbnailUrl
+    ? `url("${media.thumbnailUrl}")`
+    : "";
+
+  const position = currentPosition(playback);
+  const playerDuration = state.playerReady ? state.player.getDuration?.() || 0 : 0;
+  const actual = state.playerReady && media ? state.player.getCurrentTime?.() || 0 : 0;
+  const drift = media ? Math.abs(actual - position) : 0;
+  els.syncStatus.textContent = media ? (drift > 2.5 ? "Catching up" : "In sync") : "No media";
+  els.seekSlider.max = String(playerDuration || 100);
+  if (!state.isSeeking) {
+    els.seekSlider.value = String(Math.min(position, playerDuration || 100));
+  }
+  els.elapsed.textContent = formatSec(position);
+  els.duration.textContent = playerDuration ? formatSec(playerDuration) : "--:--";
+  els.seekSlider.disabled = !isAuxHolder() || !media;
+  els.mediaInput.disabled = !isAuxHolder();
+  els.mediaForm.querySelector("button").disabled = !isAuxHolder();
+  els.mediaInput.placeholder = isAuxHolder()
+    ? "Paste YouTube or YouTube Music link"
+    : "Only the aux holder can load links";
+  document.body.classList.toggle("audio-focus", state.displayMode === "audio");
+  els.videoModeButton.classList.toggle("secondary", state.displayMode !== "video");
+  els.audioModeButton.classList.toggle("secondary", state.displayMode !== "audio");
+  renderMessages(room.messages || []);
+
+  els.participants.innerHTML = "";
+  const otherParticipants = room.participants.filter((person) => person.id !== state.participantId);
+  for (const person of room.participants) {
+    const row = document.createElement("div");
+    row.className = `person${person.online ? " online" : ""}`;
+    const badges = [
+      person.id === state.participantId ? "you" : "",
+      person.id === room.auxHolderId ? "aux" : ""
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(person.name)}</strong>
+        <span class="muted small">${[person.online ? "online" : "offline", badges].filter(Boolean).join(" · ")}</span>
+      </div>
+    `;
+    if (person.id !== state.participantId) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary";
+      button.textContent = "Pass aux";
+      button.disabled = !isAuxHolder();
+      let transferInFlight = false;
+      const passAux = async () => {
+        if (!isAuxHolder() || transferInFlight) return;
+        transferInFlight = true;
+        const previousRoom = state.room;
+        const from = state.room.participants.find((participant) => participant.id === state.participantId);
+        state.room = {
+          ...state.room,
+          auxHolderId: person.id
+        };
+        addLocalSystemMessage(`${from?.name || "Someone"} passed aux to ${person.name}.`);
+        render();
+        button.disabled = true;
+        const data = await command("aux-transfer", { toParticipantId: person.id });
+        if (data?.room) {
+          state.room = data.room;
+          render();
+        } else {
+          state.room = previousRoom;
+          render();
+          setMessage("Aux transfer failed. Try again after both people are connected.");
+        }
+        transferInFlight = false;
+        button.disabled = false;
+      };
+      button.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        passAux();
+      });
+      button.addEventListener("click", passAux);
+      row.append(button);
+    }
+    els.participants.append(row);
+  }
+  if (!otherParticipants.length) {
+    const row = document.createElement("div");
+    row.className = "person empty";
+    row.innerHTML = `
+      <div>
+        <strong>No one else yet</strong>
+        <span class="muted small">Share the invite link to pass aux.</span>
+      </div>
+    `;
+    els.participants.append(row);
+  }
+}
+
+function renderPlaybackProgress() {
+  if (!state.room) return;
+  const playback = state.room.playback;
+  const media = playback.media;
+  const position = currentPosition(playback);
+  const playerDuration = state.playerReady ? state.player.getDuration?.() || 0 : 0;
+  const actual = state.playerReady && media ? state.player.getCurrentTime?.() || 0 : 0;
+  const drift = media ? Math.abs(actual - position) : 0;
+
+  els.syncStatus.textContent = media ? (drift > 2.5 ? "Catching up" : "In sync") : "No media";
+  els.seekSlider.max = String(playerDuration || 100);
+  if (!state.isSeeking) {
+    els.seekSlider.value = String(Math.min(position, playerDuration || 100));
+  }
+  els.elapsed.textContent = formatSec(position);
+  els.duration.textContent = playerDuration ? formatSec(playerDuration) : "--:--";
+}
+
+function tick() {
+  if (state.room) {
+    renderPlaybackProgress();
+    const playback = state.room.playback;
+    if (!state.isSeeking && state.playerReady && playback?.media && playback.isPlaying) {
+      const desired = currentPosition(playback);
+      const actual = state.player.getCurrentTime?.() || 0;
+      if (Math.abs(actual - desired) > 2.5) {
+        state.suppressPlayerEventsUntil = Date.now() + 1000;
+        state.player.seekTo(desired, true);
+      }
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+async function restoreRoomFromUrl(params) {
+  const code = params.get("room")?.toUpperCase();
+  if (!code) return;
+  const forceJoin = params.get("join") === "1";
+  const participantFromUrl = params.get("participant");
+  if (forceJoin) {
+    state.participantId = resetTabParticipantId();
+    els.joinName.value = "";
+  } else if (participantFromUrl) {
+    state.participantId = participantFromUrl;
+    window.name = `cozyAux:${participantFromUrl}`;
+  }
+  state.pendingRoomCode = code;
+  els.joinCode.value = code;
+  try {
+    const data = await api(`/api/rooms/${code}`);
+    const isInRoom = data.room.participants.some((person) => person.id === state.participantId);
+    if (isInRoom && !forceJoin) enterRoom(data.room);
+    else {
+      els.joinCode.value = code;
+      els.setupView.classList.remove("hidden");
+      els.roomView.classList.add("hidden");
+      setMessage(`Enter your name to join room ${code}.`);
+      els.joinName.focus();
+    }
+  } catch {
+    setMessage("That room is not active anymore.");
+  }
+}
+
+async function init() {
+  const params = new URLSearchParams(location.search);
+  await restoreRoomFromUrl(params);
+}
+
+els.createName.value = state.name;
+els.joinName.value = state.name;
+els.createForm.addEventListener("submit", createRoom);
+els.joinForm.addEventListener("submit", joinRoom);
+els.copyInviteButton.addEventListener("click", async () => {
+  const url = `${location.origin}/?room=${state.room.code}&join=1`;
+  await navigator.clipboard.writeText(url);
+  setMessage("Invite link copied.");
+});
+els.copyCodeButton.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(state.room.code);
+  setMessage("Room code copied.");
+});
+els.playButton.addEventListener("click", () =>
+  command("play", {
+    positionSec: state.playerReady ? state.player.getCurrentTime() : currentPosition(state.room?.playback)
+  })
+);
+els.pauseButton.addEventListener("click", () =>
+  command("pause", {
+    positionSec: state.playerReady ? state.player.getCurrentTime() : currentPosition(state.room?.playback)
+  })
+);
+function commitSeek() {
+  const now = Date.now();
+  if (now - state.lastSeekCommitAt < 150) return;
+  state.lastSeekCommitAt = now;
+  state.isSeeking = false;
+  command("seek", { positionSec: Number(els.seekSlider.value) });
+}
+
+els.seekSlider.addEventListener("change", () => {
+  if (!state.isSeeking) commitSeek();
+});
+els.seekSlider.addEventListener("pointerdown", () => {
+  state.isSeeking = true;
+});
+els.seekSlider.addEventListener("input", () => {
+  if (state.isSeeking) els.elapsed.textContent = formatSec(Number(els.seekSlider.value));
+});
+els.seekSlider.addEventListener("pointerup", commitSeek);
+els.seekSlider.addEventListener("touchend", commitSeek);
+els.mediaForm.addEventListener("submit", submitMedia);
+els.chatForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = els.chatInput.value.trim();
+  if (!text) return;
+  els.chatInput.value = "";
+  await command("chat-send", { text });
+});
+els.videoModeButton.addEventListener("click", () => {
+  state.displayMode = "video";
+  localStorage.setItem("cozyAuxDisplayMode", state.displayMode);
+  render();
+});
+els.audioModeButton.addEventListener("click", () => {
+  state.displayMode = "audio";
+  localStorage.setItem("cozyAuxDisplayMode", state.displayMode);
+  render();
+});
+
+init().catch((error) => setMessage(error.message));
+tick();

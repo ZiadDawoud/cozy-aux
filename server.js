@@ -1,0 +1,470 @@
+import http from "node:http";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const publicDir = join(__dirname, "public");
+const port = Number(process.env.PORT || 3000);
+const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
+
+const rooms = new Map();
+
+const mime = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml"
+};
+
+function makeRoomCode() {
+  let code = "";
+  do {
+    code = randomBytes(3).toString("hex").toUpperCase();
+  } while (rooms.has(code));
+  return code;
+}
+
+function roomSnapshot(room) {
+  return {
+    code: room.code,
+    auxHolderId: room.auxHolderId,
+    participants: [...room.participants.values()],
+    playback: room.playback,
+    messages: room.messages
+  };
+}
+
+function sendJson(res, status, body) {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body));
+}
+
+function badRequest(res, message, status = 400) {
+  sendJson(res, status, { error: message });
+}
+
+function encodeWebSocketFrame(text) {
+  const payload = Buffer.from(text);
+  const length = payload.length;
+  if (length < 126) {
+    return Buffer.concat([Buffer.from([0x81, length]), payload]);
+  }
+  if (length < 65536) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 126;
+    header.writeUInt16BE(length, 2);
+    return Buffer.concat([header, payload]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x81;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(length), 2);
+  return Buffer.concat([header, payload]);
+}
+
+function acceptWebSocket(req, socket) {
+  const key = req.headers["sec-websocket-key"];
+  if (!key) {
+    socket.destroy();
+    return;
+  }
+  const accept = createHash("sha1")
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest("base64");
+  socket.write(
+    [
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "\r\n"
+    ].join("\r\n")
+  );
+}
+
+async function readJson(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  if (!chunks.length) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function broadcast(room, event, payload = roomSnapshot(room)) {
+  const data = JSON.stringify(payload);
+  const message = `event: ${event}\ndata: ${data}\n\n`;
+  for (const client of room.clients) {
+    try {
+      client.write(message);
+    } catch {
+      room.clients.delete(client);
+    }
+  }
+  const socketMessage = encodeWebSocketFrame(JSON.stringify({ event, data: payload }));
+  for (const socket of room.sockets) {
+    try {
+      socket.write(socketMessage);
+    } catch {
+      room.sockets.delete(socket);
+      socket.destroy();
+    }
+  }
+}
+
+function getRoom(code) {
+  return rooms.get(String(code || "").toUpperCase());
+}
+
+function touchParticipant(room, participantId, patch = {}) {
+  const existing = room.participants.get(participantId);
+  if (!existing) return null;
+  const updated = { ...existing, ...patch, lastSeenAt: Date.now() };
+  room.participants.set(participantId, updated);
+  return updated;
+}
+
+function createRoom(hostName, participantId) {
+  const code = makeRoomCode();
+  const host = {
+    id: participantId,
+    name: hostName || "Host",
+    online: false,
+    joinedAt: Date.now(),
+    lastSeenAt: Date.now()
+  };
+  const room = {
+    code,
+    auxHolderId: participantId,
+    participants: new Map([[participantId, host]]),
+    clients: new Set(),
+    sockets: new Set(),
+    connections: new Map(),
+    messages: [],
+    playback: {
+      media: null,
+      isPlaying: false,
+      positionSec: 0,
+      startedAt: null,
+      updatedAt: Date.now(),
+      updatedBy: participantId
+    }
+  };
+  rooms.set(code, room);
+  return room;
+}
+
+function assertAux(room, participantId, command) {
+  if (room.auxHolderId !== participantId) {
+    return `${command} is only available to the current aux holder.`;
+  }
+  return null;
+}
+
+async function fetchYouTubeMeta(videoId) {
+  const videoUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+  const response = await fetch(
+    `https://www.youtube.com/oembed?${new URLSearchParams({
+      url: videoUrl,
+      format: "json"
+    })}`
+  );
+  if (!response.ok) return null;
+  const data = await response.json();
+  return {
+    title: data.title || "YouTube link",
+    authorName: data.author_name || "",
+    thumbnailUrl: data.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+  };
+}
+
+async function routeApi(req, res, url) {
+  if (req.method === "POST" && url.pathname === "/api/rooms") {
+    const body = await readJson(req);
+    const participantId = body.participantId || randomUUID();
+    const room = createRoom(body.name, participantId);
+    return sendJson(res, 201, { participantId, room: roomSnapshot(room) });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/youtube/meta") {
+    const videoId = url.searchParams.get("videoId");
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId || "")) {
+      return badRequest(res, "Invalid YouTube video ID.");
+    }
+    const meta = await fetchYouTubeMeta(videoId).catch(() => null);
+    return sendJson(res, 200, {
+      meta: meta || {
+        title: "YouTube link",
+        authorName: "",
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+      }
+    });
+  }
+
+  const joinMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})\/join$/);
+  if (req.method === "POST" && joinMatch) {
+    const room = getRoom(joinMatch[1]);
+    if (!room) return badRequest(res, "Room not found.", 404);
+    const body = await readJson(req);
+    const participantId = body.participantId || randomUUID();
+    if (!room.participants.has(participantId) && room.participants.size >= 3) {
+      return badRequest(res, "Room is full.", 409);
+    }
+    const existing = room.participants.get(participantId);
+    room.participants.set(participantId, {
+      id: participantId,
+      joinedAt: existing?.joinedAt || Date.now(),
+      lastSeenAt: Date.now(),
+      online: (room.connections.get(participantId) || 0) > 0,
+      name: body.name || existing?.name || "Listener"
+    });
+    broadcast(room, "room");
+    return sendJson(res, 200, { participantId, room: roomSnapshot(room) });
+  }
+
+  const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})$/);
+  if (req.method === "GET" && roomMatch) {
+    const room = getRoom(roomMatch[1]);
+    if (!room) return badRequest(res, "Room not found.", 404);
+    return sendJson(res, 200, { room: roomSnapshot(room) });
+  }
+
+  const eventsMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})\/events$/);
+  if (req.method === "GET" && eventsMatch) {
+    const room = getRoom(eventsMatch[1]);
+    if (!room) {
+      res.writeHead(404);
+      return res.end();
+    }
+    const participantId = url.searchParams.get("participantId");
+    if (participantId) {
+      room.connections.set(participantId, (room.connections.get(participantId) || 0) + 1);
+      touchParticipant(room, participantId, { online: true });
+    }
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive"
+    });
+    room.clients.add(res);
+    res.write(`event: room\ndata: ${JSON.stringify(roomSnapshot(room))}\n\n`);
+    broadcast(room, "presence");
+    req.on("close", () => {
+      room.clients.delete(res);
+      if (!participantId) return;
+      const nextCount = Math.max(0, (room.connections.get(participantId) || 1) - 1);
+      if (nextCount === 0) {
+        room.connections.delete(participantId);
+        touchParticipant(room, participantId, { online: false });
+      } else {
+        room.connections.set(participantId, nextCount);
+      }
+      broadcast(room, "presence");
+    });
+    return;
+  }
+
+  const commandMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})\/commands$/);
+  if (req.method === "POST" && commandMatch) {
+    const room = getRoom(commandMatch[1]);
+    if (!room) return badRequest(res, "Room not found.", 404);
+    const body = await readJson(req);
+    const participantId = body.participantId;
+    if (!room.participants.has(participantId)) return badRequest(res, "Participant not in room.", 403);
+    touchParticipant(room, participantId);
+
+    const now = Date.now();
+    if (body.type === "play") {
+      const positionSec =
+        typeof body.positionSec === "number"
+          ? body.positionSec
+          : typeof body.positionMs === "number"
+            ? body.positionMs / 1000
+            : room.playback.positionSec || 0;
+      room.playback = {
+        ...room.playback,
+        isPlaying: true,
+        startedAt: now - positionSec * 1000,
+        updatedAt: now,
+        updatedBy: participantId
+      };
+    } else if (body.type === "pause") {
+      const positionSec =
+        typeof body.positionSec === "number"
+          ? body.positionSec
+          : typeof body.positionMs === "number"
+            ? body.positionMs / 1000
+          : room.playback.startedAt
+            ? (now - room.playback.startedAt) / 1000
+            : room.playback.positionSec;
+      room.playback = {
+        ...room.playback,
+        isPlaying: false,
+        positionSec: Math.max(0, positionSec),
+        startedAt: null,
+        updatedAt: now,
+        updatedBy: participantId
+      };
+    } else if (body.type === "media-change" || body.type === "track-change") {
+      const error = assertAux(room, participantId, "Changing media");
+      if (error) return badRequest(res, error, 403);
+      if (!body.media?.videoId) return badRequest(res, "Paste a valid YouTube link.");
+      room.playback = {
+        media: body.media,
+        isPlaying: true,
+        positionSec: 0,
+        startedAt: now,
+        updatedAt: now,
+        updatedBy: participantId
+      };
+    } else if (body.type === "seek") {
+      const error = assertAux(room, participantId, "Seeking");
+      if (error) return badRequest(res, error, 403);
+      const positionSec = Math.max(
+        0,
+        typeof body.positionSec === "number" ? body.positionSec : Number(body.positionMs || 0) / 1000
+      );
+      room.playback = {
+        ...room.playback,
+        positionSec,
+        startedAt: room.playback.isPlaying ? now - positionSec * 1000 : null,
+        updatedAt: now,
+        updatedBy: participantId
+      };
+    } else if (body.type === "aux-transfer") {
+      const error = assertAux(room, participantId, "Passing aux");
+      if (error) return badRequest(res, error, 403);
+      if (!room.participants.has(body.toParticipantId)) {
+        return badRequest(res, "That participant is not in the room.", 404);
+      }
+      const from = room.participants.get(participantId);
+      const to = room.participants.get(body.toParticipantId);
+      room.auxHolderId = body.toParticipantId;
+      room.messages = [
+        ...room.messages,
+        {
+          id: randomUUID(),
+          participantId: "system",
+          name: "Cozy Aux",
+          text: `${from?.name || "Someone"} passed aux to ${to?.name || "someone"}.`,
+          sentAt: now,
+          system: true
+        }
+      ].slice(-100);
+    } else if (body.type === "chat-send") {
+      const text = String(body.text || "").trim().slice(0, 500);
+      if (!text) return badRequest(res, "Message cannot be empty.");
+      const participant = room.participants.get(participantId);
+      room.messages = [
+        ...room.messages,
+        {
+          id: randomUUID(),
+          participantId,
+          name: participant?.name || "Listener",
+          text,
+          sentAt: now
+        }
+      ].slice(-100);
+    } else {
+      return badRequest(res, "Unknown command.");
+    }
+
+    broadcast(room, body.type);
+    return sendJson(res, 200, { room: roomSnapshot(room) });
+  }
+
+  return false;
+}
+
+async function serveStatic(res, pathname) {
+  const requested = pathname === "/" ? "/index.html" : pathname;
+  const safePath = normalize(requested).replace(/^(\.\.[/\\])+/, "");
+  const filePath = join(publicDir, safePath);
+  if (!filePath.startsWith(publicDir)) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+  try {
+    const body = await readFile(filePath);
+    res.writeHead(200, { "content-type": mime[extname(filePath)] || "application/octet-stream" });
+    res.end(body);
+  } catch {
+    const body = await readFile(join(publicDir, "index.html"));
+    res.writeHead(200, { "content-type": mime[".html"] });
+    res.end(body);
+  }
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    if (url.pathname.startsWith("/api/")) {
+      const handled = await routeApi(req, res, url);
+      if (handled === false) badRequest(res, "Not found.", 404);
+      return;
+    }
+    await serveStatic(res, url.pathname);
+  } catch (error) {
+    console.error(error);
+    sendJson(res, 500, { error: "Server error." });
+  }
+});
+
+server.on("upgrade", (req, socket) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const match = url.pathname.match(/^\/ws\/rooms\/([A-F0-9]{6})$/);
+    if (!match) {
+      socket.destroy();
+      return;
+    }
+
+    const room = getRoom(match[1]);
+    const participantId = url.searchParams.get("participantId");
+    if (!room || !participantId || !room.participants.has(participantId)) {
+      socket.destroy();
+      return;
+    }
+
+    acceptWebSocket(req, socket);
+    room.sockets.add(socket);
+    room.connections.set(participantId, (room.connections.get(participantId) || 0) + 1);
+    touchParticipant(room, participantId, { online: true });
+    socket.write(encodeWebSocketFrame(JSON.stringify({ event: "room", data: roomSnapshot(room) })));
+    broadcast(room, "presence");
+
+    socket.on("data", (chunk) => {
+      if ((chunk[0] & 0x0f) === 0x8) socket.end();
+    });
+    socket.on("close", () => {
+      room.sockets.delete(socket);
+      const nextCount = Math.max(0, (room.connections.get(participantId) || 1) - 1);
+      if (nextCount === 0) {
+        room.connections.delete(participantId);
+        touchParticipant(room, participantId, { online: false });
+      } else {
+        room.connections.set(participantId, nextCount);
+      }
+      broadcast(room, "presence");
+    });
+    socket.on("error", () => {
+      socket.destroy();
+    });
+  } catch {
+    socket.destroy();
+  }
+});
+
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`Port ${port} is already in use. Stop the other server or run with PORT=3001.`);
+    process.exit(1);
+  }
+  throw error;
+});
+
+server.listen(port, "127.0.0.1", () => {
+  console.log(`Cozy Aux prototype running at ${publicBaseUrl}`);
+});

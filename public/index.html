@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cozy Aux</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="room-panel">
+        <div class="brand-row">
+          <div>
+            <p class="eyebrow">Private synced listening</p>
+            <h1>Cozy Aux</h1>
+          </div>
+          <span id="connectionStatus" class="status-pill">Offline</span>
+        </div>
+
+        <div id="setupView" class="setup-grid">
+          <form id="createForm" class="surface">
+            <h2>Create a room</h2>
+            <label>
+              Your name
+              <input id="createName" autocomplete="name" placeholder="Ziad" />
+            </label>
+            <button type="submit">Create room</button>
+          </form>
+
+          <form id="joinForm" class="surface">
+            <h2>Join a room</h2>
+            <label>
+              Your name
+              <input id="joinName" autocomplete="name" placeholder="Listener" />
+            </label>
+            <label>
+              Room code
+              <input id="joinCode" maxlength="6" placeholder="A1B2C3" />
+            </label>
+            <button type="submit">Join room</button>
+          </form>
+        </div>
+
+        <div id="roomView" class="room-view hidden">
+          <section class="surface now-playing">
+            <div class="room-head">
+              <div>
+                <p class="eyebrow">Room</p>
+                <h2 id="roomCode">------</h2>
+              </div>
+              <div class="room-actions">
+                <button id="copyCodeButton" class="secondary" type="button">Copy code</button>
+                <button id="copyInviteButton" class="secondary" type="button">Copy invite</button>
+              </div>
+            </div>
+
+            <div class="track-row">
+              <div id="artwork" class="artwork"></div>
+              <div class="track-copy">
+                <p id="mediaTitle" class="track-name">No link selected</p>
+                <p id="mediaMeta" class="muted">Paste a YouTube or YouTube Music link to start.</p>
+              </div>
+            </div>
+
+            <div class="player-shell">
+              <div id="audioArtwork" class="audio-artwork"></div>
+              <div id="playerMount"></div>
+            </div>
+
+            <div class="progress-shell">
+              <input id="seekSlider" min="0" max="100" value="0" type="range" />
+              <div class="time-row">
+                <span id="elapsed">0:00</span>
+                <span id="duration">0:00</span>
+              </div>
+            </div>
+
+            <div class="controls">
+              <button id="playButton" type="button">Play</button>
+              <button id="pauseButton" type="button">Pause</button>
+            </div>
+          </section>
+
+          <section class="side-stack">
+            <div class="surface">
+              <div class="section-head">
+                <h2>Shared link</h2>
+                <span id="syncStatus" class="status-pill">No media</span>
+              </div>
+              <form id="mediaForm" class="link-form">
+                <input id="mediaInput" placeholder="Paste YouTube or YouTube Music link" />
+                <button type="submit">Load</button>
+              </form>
+              <div class="mode-toggle">
+                <button id="videoModeButton" type="button">Video</button>
+                <button id="audioModeButton" class="secondary" type="button">Audio focus</button>
+              </div>
+            </div>
+
+            <div class="surface">
+              <div class="section-head">
+                <h2>People</h2>
+                <span id="auxLabel" class="status-pill">Aux: --</span>
+              </div>
+              <div id="participants" class="participants"></div>
+            </div>
+
+            <div class="surface chat-surface">
+              <div class="section-head">
+                <h2>Chat</h2>
+                <span id="chatCount" class="status-pill">0</span>
+              </div>
+              <div id="chatMessages" class="chat-messages"></div>
+              <form id="chatForm" class="chat-form">
+                <input id="chatInput" maxlength="500" placeholder="Send a message" />
+                <button type="submit">Send</button>
+              </form>
+            </div>
+          </section>
+        </div>
+
+        <p id="message" class="message"></p>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
