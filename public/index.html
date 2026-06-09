@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cozy Aux</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -12,7 +14,7 @@
         <div class="brand-row">
           <div>
             <p class="eyebrow">Private synced listening</p>
-            <h1>Cozy Aux</h1>
+            <h1><img class="app-icon" src="/icon.svg" alt="" />Cozy Aux</h1>
           </div>
           <span id="connectionStatus" class="status-pill">Offline</span>
         </div>
@@ -49,6 +51,7 @@
                 <h2 id="roomCode">------</h2>
               </div>
               <div class="room-actions">
+                <button id="homeButton" class="secondary" type="button">Home</button>
                 <button id="copyCodeButton" class="secondary" type="button">Copy code</button>
                 <button id="copyInviteButton" class="secondary" type="button">Copy invite</button>
               </div>

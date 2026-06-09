@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cozy Aux">
+  <rect width="64" height="64" rx="14" fill="#121313"/>
+  <circle cx="32" cy="32" r="21" fill="#f2c86b"/>
+  <path d="M27 22v20l17-10-17-10Z" fill="#181514"/>
+  <path d="M18 45c7 5 21 5 28 0" fill="none" stroke="#8fbab4" stroke-width="4" stroke-linecap="round"/>
+</svg>

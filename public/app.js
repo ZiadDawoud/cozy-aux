@@ -22,6 +22,7 @@ const els = {
   joinCode: $("#joinCode"),
   connectionStatus: $("#connectionStatus"),
   roomCode: $("#roomCode"),
+  homeButton: $("#homeButton"),
   copyCodeButton: $("#copyCodeButton"),
   copyInviteButton: $("#copyInviteButton"),
   participants: $("#participants"),
@@ -239,6 +240,21 @@ function enterRoom(room) {
   ensurePlayer();
   openEvents();
   render();
+}
+
+function goHome() {
+  if (state.events) {
+    state.events.close();
+    state.events = null;
+  }
+  state.room = null;
+  state.appliedMediaId = null;
+  els.roomView.classList.add("hidden");
+  els.setupView.classList.remove("hidden");
+  els.connectionStatus.textContent = "Offline";
+  els.joinCode.value = "";
+  setMessage("");
+  history.replaceState(null, "", "/");
 }
 
 function openEvents() {
@@ -570,6 +586,7 @@ els.createName.value = state.name;
 els.joinName.value = state.name;
 els.createForm.addEventListener("submit", createRoom);
 els.joinForm.addEventListener("submit", joinRoom);
+els.homeButton.addEventListener("click", goHome);
 els.copyInviteButton.addEventListener("click", async () => {
   const url = `${location.origin}/?room=${state.room.code}&join=1`;
   await navigator.clipboard.writeText(url);

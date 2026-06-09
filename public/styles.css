@@ -75,8 +75,17 @@ p {
 }
 
 h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
   font-size: clamp(2rem, 5vw, 4rem);
   line-height: 0.95;
+}
+
+.app-icon {
+  width: clamp(42px, 7vw, 64px);
+  height: clamp(42px, 7vw, 64px);
+  border-radius: 14px;
 }
 
 h2 {
@@ -113,6 +122,7 @@ h2 {
 }
 
 .room-actions {
+  flex-wrap: wrap;
   justify-content: flex-end;
 }
 
