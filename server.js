@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(__dirname, "public");
 const port = Number(process.env.PORT || 3000);
+const host = process.env.HOST || "127.0.0.1";
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
 
 const rooms = new Map();
@@ -465,6 +466,6 @@ server.on("error", (error) => {
   throw error;
 });
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, host, () => {
   console.log(`Cozy Aux prototype running at ${publicBaseUrl}`);
 });
