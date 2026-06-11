@@ -20,6 +20,44 @@
         </div>
 
         <div id="setupView" class="setup-grid">
+          <section class="surface account-surface">
+            <div class="section-head">
+              <h2>Profile</h2>
+              <span id="profileStatus" class="status-pill">Not set</span>
+            </div>
+            <form id="profileForm" class="profile-form">
+              <label>
+                Display name
+                <input id="profileName" autocomplete="name" placeholder="Ziad" />
+              </label>
+              <label>
+                Handle
+                <input id="profileHandle" autocomplete="username" placeholder="ziad" />
+              </label>
+              <button type="submit">Create profile</button>
+            </form>
+            <div id="profileCard" class="profile-card hidden">
+              <div>
+                <strong id="profileDisplayName">--</strong>
+                <span id="profileHandleText" class="muted small">@--</span>
+              </div>
+              <button id="copyFriendCodeButton" class="secondary" type="button">Copy friend code</button>
+            </div>
+          </section>
+
+          <section class="surface friends-surface">
+            <div class="section-head">
+              <h2>Friends</h2>
+              <span id="friendCount" class="status-pill">0</span>
+            </div>
+            <form id="friendForm" class="friend-form">
+              <input id="friendLookup" placeholder="Handle or friend code" />
+              <button type="submit">Add</button>
+            </form>
+            <div id="friendsList" class="stack-list"></div>
+            <div id="inviteList" class="stack-list"></div>
+          </section>
+
           <form id="createForm" class="surface">
             <h2>Create a room</h2>
             <label>
@@ -54,6 +92,7 @@
                 <button id="homeButton" class="secondary" type="button">Home</button>
                 <button id="copyCodeButton" class="secondary" type="button">Copy code</button>
                 <button id="copyInviteButton" class="secondary" type="button">Copy invite</button>
+                <button id="endRoomButton" class="secondary danger" type="button">End room</button>
               </div>
             </div>
 
@@ -105,6 +144,10 @@
                 <h2>People</h2>
                 <span id="auxLabel" class="status-pill">Aux: --</span>
               </div>
+              <form id="friendInviteForm" class="friend-form">
+                <select id="friendInviteSelect" aria-label="Friend to invite"></select>
+                <button type="submit">Invite</button>
+              </form>
               <div id="participants" class="participants"></div>
             </div>
 

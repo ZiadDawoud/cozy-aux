@@ -15,6 +15,19 @@ function resetTabParticipantId() {
 const els = {
   setupView: $("#setupView"),
   roomView: $("#roomView"),
+  profileForm: $("#profileForm"),
+  profileName: $("#profileName"),
+  profileHandle: $("#profileHandle"),
+  profileStatus: $("#profileStatus"),
+  profileCard: $("#profileCard"),
+  profileDisplayName: $("#profileDisplayName"),
+  profileHandleText: $("#profileHandleText"),
+  copyFriendCodeButton: $("#copyFriendCodeButton"),
+  friendForm: $("#friendForm"),
+  friendLookup: $("#friendLookup"),
+  friendCount: $("#friendCount"),
+  friendsList: $("#friendsList"),
+  inviteList: $("#inviteList"),
   createForm: $("#createForm"),
   joinForm: $("#joinForm"),
   createName: $("#createName"),
@@ -25,7 +38,10 @@ const els = {
   homeButton: $("#homeButton"),
   copyCodeButton: $("#copyCodeButton"),
   copyInviteButton: $("#copyInviteButton"),
+  endRoomButton: $("#endRoomButton"),
   participants: $("#participants"),
+  friendInviteForm: $("#friendInviteForm"),
+  friendInviteSelect: $("#friendInviteSelect"),
   auxLabel: $("#auxLabel"),
   syncStatus: $("#syncStatus"),
   mediaTitle: $("#mediaTitle"),
@@ -53,6 +69,10 @@ const state = {
   participantId: getTabParticipantId(),
   name: localStorage.getItem("cozyAuxName") || "",
   room: null,
+  account: null,
+  friends: [],
+  invites: [],
+  savedRooms: [],
   events: null,
   player: null,
   playerReady: false,
@@ -87,10 +107,12 @@ function isAuxHolder() {
 }
 
 async function api(path, options = {}) {
+  const authToken = localStorage.getItem("cozyAuxAuthToken");
   const response = await fetch(path, {
     ...options,
     headers: {
       "content-type": "application/json",
+      ...(authToken ? { "x-auth-token": authToken } : {}),
       ...(options.headers || {})
     }
   });
@@ -202,6 +224,11 @@ function handlePlayerStateChange(event) {
 
 async function createRoom(event) {
   event.preventDefault();
+  if (!state.account) {
+    setMessage("Create a profile first so your rooms and friends can be saved.");
+    els.profileName.focus();
+    return;
+  }
   state.name = els.createName.value.trim() || "Host";
   localStorage.setItem("cozyAuxName", state.name);
   const data = await api("/api/rooms", {
@@ -213,6 +240,11 @@ async function createRoom(event) {
 
 async function joinRoom(event) {
   event.preventDefault();
+  if (!state.account) {
+    setMessage("Create a profile first so your rooms and friends can be saved.");
+    els.profileName.focus();
+    return;
+  }
   state.name = els.joinName.value.trim() || "Listener";
   localStorage.setItem("cozyAuxName", state.name);
   const code = els.joinCode.value.trim().toUpperCase();
@@ -277,6 +309,12 @@ function openEvents() {
     const message = JSON.parse(event.data);
     const eventName = message.event;
     const nextRoom = message.data;
+    if (eventName === "room-ended" || nextRoom?.endedAt) {
+      setMessage("This room was ended.");
+      goHome();
+      await loadAccount().catch(() => {});
+      return;
+    }
     const previousPlayback = state.room?.playback;
     const canAffectPlayback = !["aux-transfer", "presence", "chat-send", "room"].includes(eventName);
     const playbackChanged =
@@ -306,6 +344,112 @@ async function command(type, payload = {}) {
   } catch (error) {
     setMessage(error.message);
     return null;
+  }
+}
+
+async function loadAccount() {
+  const data = await api("/api/me");
+  state.account = data.user;
+  state.friends = data.friends || [];
+  state.invites = data.invites || [];
+  state.savedRooms = data.rooms || [];
+  if (state.account) {
+    state.name = state.account.displayName;
+    localStorage.setItem("cozyAuxName", state.name);
+    els.createName.value = state.name;
+    els.joinName.value = state.name;
+  }
+  renderAccount();
+}
+
+function renderAccount() {
+  const user = state.account;
+  els.profileStatus.textContent = user ? "Saved" : "Not set";
+  els.profileForm.classList.toggle("hidden", Boolean(user));
+  els.profileCard.classList.toggle("hidden", !user);
+  if (user) {
+    els.profileDisplayName.textContent = user.displayName;
+    els.profileHandleText.textContent = `@${user.handle} · friend code ${user.friendCode}`;
+  }
+
+  els.friendCount.textContent = String(state.friends.length);
+  els.friendsList.innerHTML = "";
+  if (!user) {
+    els.friendsList.innerHTML = `<div class="list-row empty">Create a profile to add friends.</div>`;
+  } else if (!state.friends.length) {
+    els.friendsList.innerHTML = `<div class="list-row empty">No friends yet.</div>`;
+  } else {
+    for (const friend of state.friends) {
+      const row = document.createElement("div");
+      row.className = "list-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(friend.displayName)}</strong>
+          <span class="muted small">@${escapeHtml(friend.handle)}</span>
+        </div>
+      `;
+      els.friendsList.append(row);
+    }
+  }
+
+  els.inviteList.innerHTML = "";
+  for (const invite of state.invites) {
+    const row = document.createElement("div");
+    row.className = "list-row";
+    row.innerHTML = `
+      <div>
+        <strong>Room ${escapeHtml(invite.roomCode)}</strong>
+        <span class="muted small">Invited by ${escapeHtml(invite.from?.displayName || "a friend")}</span>
+      </div>
+      <button class="secondary" type="button">Join</button>
+    `;
+    row.querySelector("button").addEventListener("click", () => {
+      els.joinCode.value = invite.roomCode;
+      els.joinName.value = state.name || user.displayName;
+      els.joinForm.requestSubmit();
+    });
+    els.inviteList.append(row);
+  }
+}
+
+async function createProfile(event) {
+  event.preventDefault();
+  const displayName = els.profileName.value.trim();
+  const handle = els.profileHandle.value.trim();
+  try {
+    const data = await api("/api/users", {
+      method: "POST",
+      body: JSON.stringify({ displayName, handle })
+    });
+    localStorage.setItem("cozyAuxAuthToken", data.authToken);
+    state.account = data.user;
+    state.name = data.user.displayName;
+    localStorage.setItem("cozyAuxName", state.name);
+    els.createName.value = state.name;
+    els.joinName.value = state.name;
+    await loadAccount();
+    setMessage("Profile created.");
+  } catch (error) {
+    setMessage(error.message);
+  }
+}
+
+async function addFriend(event) {
+  event.preventDefault();
+  const lookup = els.friendLookup.value.trim();
+  if (!lookup) return;
+  try {
+    const data = await api("/api/friends", {
+      method: "POST",
+      body: JSON.stringify({ lookup })
+    });
+    state.friends = data.friends || [];
+    els.friendLookup.value = "";
+    renderAccount();
+    render();
+    setMessage("Friend added.");
+  } catch (error) {
+    setMessage(error.message);
   }
 }
 
@@ -404,8 +548,14 @@ function addLocalSystemMessage(text) {
 
 function render() {
   const room = state.room;
-  if (!room) return;
+  if (!room) {
+    renderAccount();
+    return;
+  }
   els.roomCode.textContent = room.code;
+  const isOwner = state.account?.id && room.ownerUserId === state.account.id;
+  els.endRoomButton.disabled = !isOwner;
+  els.endRoomButton.classList.toggle("hidden", !isOwner);
 
   const aux = room.participants.find((person) => person.id === room.auxHolderId);
   els.auxLabel.textContent = `Aux: ${aux?.name || "--"}`;
@@ -442,6 +592,27 @@ function render() {
   els.videoModeButton.classList.toggle("secondary", state.displayMode !== "video");
   els.audioModeButton.classList.toggle("secondary", state.displayMode !== "audio");
   renderMessages(room.messages || []);
+
+  els.friendInviteSelect.innerHTML = "";
+  const availableFriends = state.friends.filter(
+    (friend) => !room.participants.some((person) => person.userId === friend.id)
+  );
+  if (!availableFriends.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No friends to invite";
+    els.friendInviteSelect.append(option);
+  } else {
+    for (const friend of availableFriends) {
+      const option = document.createElement("option");
+      option.value = friend.id;
+      option.textContent = friend.displayName;
+      els.friendInviteSelect.append(option);
+    }
+  }
+  els.friendInviteForm.classList.toggle("hidden", !isOwner);
+  els.friendInviteSelect.disabled = !isOwner || !availableFriends.length;
+  els.friendInviteForm.querySelector("button").disabled = !isOwner || !availableFriends.length;
 
   els.participants.innerHTML = "";
   const otherParticipants = room.participants.filter((person) => person.id !== state.participantId);
@@ -578,15 +749,51 @@ async function restoreRoomFromUrl(params) {
 }
 
 async function init() {
+  await loadAccount();
   const params = new URLSearchParams(location.search);
   await restoreRoomFromUrl(params);
 }
 
 els.createName.value = state.name;
 els.joinName.value = state.name;
+els.profileName.value = state.name;
+els.profileHandle.value = state.name.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 24);
+els.profileForm.addEventListener("submit", createProfile);
+els.friendForm.addEventListener("submit", addFriend);
+els.copyFriendCodeButton.addEventListener("click", async () => {
+  if (!state.account) return;
+  await navigator.clipboard.writeText(state.account.friendCode);
+  setMessage("Friend code copied.");
+});
 els.createForm.addEventListener("submit", createRoom);
 els.joinForm.addEventListener("submit", joinRoom);
 els.homeButton.addEventListener("click", goHome);
+els.endRoomButton.addEventListener("click", async () => {
+  if (!state.room) return;
+  const confirmEnd = window.confirm("End this room for everyone?");
+  if (!confirmEnd) return;
+  try {
+    await api(`/api/rooms/${state.room.code}/end`, { method: "POST", body: "{}" });
+    goHome();
+    await loadAccount();
+    setMessage("Room ended.");
+  } catch (error) {
+    setMessage(error.message);
+  }
+});
+els.friendInviteForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.room || !els.friendInviteSelect.value) return;
+  try {
+    await api(`/api/rooms/${state.room.code}/invites`, {
+      method: "POST",
+      body: JSON.stringify({ friendId: els.friendInviteSelect.value })
+    });
+    setMessage("Friend invited.");
+  } catch (error) {
+    setMessage(error.message);
+  }
+});
 els.copyInviteButton.addEventListener("click", async () => {
   const url = `${location.origin}/?room=${state.room.code}&join=1`;
   await navigator.clipboard.writeText(url);

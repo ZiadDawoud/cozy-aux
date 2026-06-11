@@ -20,7 +20,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -45,7 +46,13 @@ button.secondary {
   color: #f6f1e8;
 }
 
-input {
+button.danger {
+  background: #432627;
+  color: #ffd6cf;
+}
+
+input,
+select {
   width: 100%;
   min-height: 44px;
   border: 1px solid #435150;
@@ -53,6 +60,10 @@ input {
   padding: 0 12px;
   background: #171b1b;
   color: #f6f1e8;
+}
+
+select {
+  appearance: none;
 }
 
 input[type="range"] {
@@ -159,6 +170,11 @@ h2 {
   gap: 18px;
 }
 
+.account-surface,
+.friends-surface {
+  align-content: start;
+}
+
 .room-view {
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
   align-items: start;
@@ -227,15 +243,51 @@ h2 {
 .controls,
 .mode-toggle,
 .link-form,
-.chat-form {
+.chat-form,
+.profile-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
 .link-form,
-.chat-form {
+.chat-form,
+.friend-form {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.profile-form button {
+  grid-column: 1 / -1;
+}
+
+.profile-card,
+.list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #303b3a;
+  border-radius: 8px;
+  padding: 12px;
+  background: #151919;
+}
+
+.profile-card strong,
+.list-row strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.stack-list {
+  display: grid;
+  gap: 10px;
+}
+
+.list-row.empty {
+  display: block;
+  color: #b4aaa0;
 }
 
 .player-shell {
@@ -395,5 +447,12 @@ h2 {
 
   .artwork {
     width: 86px;
+  }
+
+  .profile-form,
+  .profile-card,
+  .list-row,
+  .friend-form {
+    grid-template-columns: 1fr;
   }
 }
