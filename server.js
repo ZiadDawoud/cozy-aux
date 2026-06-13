@@ -1,15 +1,17 @@
 import http from "node:http";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, loadDb, saveDb } from "./db.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(__dirname, "public");
+const uploadsDir = join(__dirname, "uploads");
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "127.0.0.1";
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
+const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 100 * 1024 * 1024);
 
 const rooms = new Map();
 
@@ -18,8 +20,23 @@ const mime = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".ogg": "audio/ogg",
+  ".wav": "audio/wav"
 };
+
+const allowedUploads = new Map([
+  [".mp3", { contentType: "audio/mpeg", mediaType: "audio" }],
+  [".m4a", { contentType: "audio/mp4", mediaType: "audio" }],
+  [".wav", { contentType: "audio/wav", mediaType: "audio" }],
+  [".ogg", { contentType: "audio/ogg", mediaType: "audio" }],
+  [".mp4", { contentType: "video/mp4", mediaType: "video" }],
+  [".webm", { contentType: "video/webm", mediaType: "video" }]
+]);
 
 function makeRoomCode() {
   let code = "";
@@ -173,6 +190,89 @@ async function readJson(req) {
   for await (const chunk of req) chunks.push(chunk);
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function readLimitedBody(req, limitBytes = maxUploadBytes) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > limitBytes) {
+      const error = new Error("Upload is too large.");
+      error.status = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function parseMultipart(req, body) {
+  const contentType = req.headers["content-type"] || "";
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
+  if (!boundary) return null;
+
+  const delimiter = Buffer.from(`--${boundary}`);
+  const parts = [];
+  let cursor = body.indexOf(delimiter);
+  while (cursor !== -1) {
+    cursor += delimiter.length;
+    if (body[cursor] === 45 && body[cursor + 1] === 45) break;
+    if (body[cursor] === 13 && body[cursor + 1] === 10) cursor += 2;
+    const headerEnd = body.indexOf(Buffer.from("\r\n\r\n"), cursor);
+    if (headerEnd === -1) break;
+    const headerText = body.subarray(cursor, headerEnd).toString("utf8");
+    let partEnd = body.indexOf(Buffer.from(`\r\n--${boundary}`), headerEnd + 4);
+    if (partEnd === -1) partEnd = body.length;
+    const content = body.subarray(headerEnd + 4, partEnd);
+    const name = headerText.match(/name="([^"]+)"/)?.[1];
+    const filename = headerText.match(/filename="([^"]*)"/)?.[1];
+    const partContentType = headerText.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim();
+    parts.push({ name, filename, contentType: partContentType, content });
+    cursor = body.indexOf(delimiter, partEnd);
+  }
+  return parts;
+}
+
+function safeUploadName(filename) {
+  return String(filename || "upload")
+    .replace(/[/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
+async function saveUploadedMedia(room, filePart) {
+  const originalName = safeUploadName(filePart.filename);
+  const extension = extname(originalName).toLowerCase();
+  const allowed = allowedUploads.get(extension);
+  if (!allowed) {
+    const error = new Error("Upload an MP3, M4A, WAV, OGG, MP4, or WebM file.");
+    error.status = 400;
+    throw error;
+  }
+  if (!filePart.content.length) {
+    const error = new Error("Choose a file to upload.");
+    error.status = 400;
+    throw error;
+  }
+  await mkdir(join(uploadsDir, room.code), { recursive: true });
+  const id = randomUUID();
+  const storedName = `${id}${extension}`;
+  const filePath = join(uploadsDir, room.code, storedName);
+  await writeFile(filePath, filePart.content);
+  return {
+    provider: "local",
+    id,
+    mediaType: allowed.mediaType,
+    title: originalName.replace(/\.[^.]+$/, "") || "Uploaded media",
+    sourceLabel: allowed.mediaType === "video" ? "Uploaded video" : "Uploaded audio",
+    fileName: originalName,
+    sizeBytes: filePart.content.length,
+    mimeType: allowed.contentType,
+    url: `/uploads/${room.code}/${storedName}`
+  };
 }
 
 function broadcast(room, event, payload = roomSnapshot(room)) {
@@ -417,6 +517,40 @@ async function routeApi(req, res, url) {
     return sendJson(res, 200, { room: roomSnapshot(room) });
   }
 
+  const uploadMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})\/upload$/);
+  if (req.method === "POST" && uploadMatch) {
+    const room = getRoom(uploadMatch[1]);
+    if (!room || room.endedAt) return badRequest(res, "Room not found.", 404);
+    const user = requireUser(req, res);
+    if (!user) return;
+    const participantId = url.searchParams.get("participantId");
+    if (!room.participants.has(participantId)) return badRequest(res, "Participant not in room.", 403);
+    const error = assertAux(room, participantId, "Uploading media");
+    if (error) return badRequest(res, error, 403);
+
+    try {
+      const body = await readLimitedBody(req);
+      const parts = parseMultipart(req, body);
+      const filePart = parts?.find((part) => part.name === "media" && part.filename);
+      if (!filePart) return badRequest(res, "Choose a media file to upload.");
+      const media = await saveUploadedMedia(room, filePart);
+      const now = Date.now();
+      room.playback = {
+        media,
+        isPlaying: true,
+        positionSec: 0,
+        startedAt: now,
+        updatedAt: now,
+        updatedBy: participantId
+      };
+      await persistRoom(room);
+      broadcast(room, "media-change");
+      return sendJson(res, 200, { room: roomSnapshot(room), media });
+    } catch (error) {
+      return badRequest(res, error.message || "Upload failed.", error.status || 500);
+    }
+  }
+
   const inviteMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})\/invites$/);
   if (req.method === "POST" && inviteMatch) {
     const room = getRoom(inviteMatch[1]);
@@ -539,7 +673,15 @@ async function routeApi(req, res, url) {
     } else if (body.type === "media-change" || body.type === "track-change") {
       const error = assertAux(room, participantId, "Changing media");
       if (error) return badRequest(res, error, 403);
-      if (!body.media?.videoId) return badRequest(res, "Paste a valid YouTube link.");
+      if (body.media?.provider === "youtube" && !body.media?.videoId) {
+        return badRequest(res, "Paste a valid YouTube link.");
+      }
+      if (body.media?.provider === "local" && !body.media?.url) {
+        return badRequest(res, "Upload a valid media file.");
+      }
+      if (!["youtube", "local"].includes(body.media?.provider)) {
+        return badRequest(res, "Choose a valid media source.");
+      }
       room.playback = {
         media: body.media,
         isPlaying: true,
@@ -627,12 +769,64 @@ async function serveStatic(res, pathname) {
   }
 }
 
+async function serveUpload(req, res, pathname) {
+  const safePath = normalize(pathname.replace(/^\/uploads\/?/, "")).replace(/^(\.\.[/\\])+/, "");
+  const filePath = join(uploadsDir, safePath);
+  if (!filePath.startsWith(uploadsDir)) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+  try {
+    const fileStat = await stat(filePath);
+    const contentType = mime[extname(filePath).toLowerCase()] || "application/octet-stream";
+    const range = req.headers.range;
+    if (range) {
+      const match = range.match(/bytes=(\d*)-(\d*)/);
+      if (!match) {
+        res.writeHead(416, { "content-range": `bytes */${fileStat.size}` });
+        return res.end();
+      }
+      const start = match[1] ? Number(match[1]) : 0;
+      const end = match[2] ? Number(match[2]) : fileStat.size - 1;
+      if (start >= fileStat.size || end >= fileStat.size || start > end) {
+        res.writeHead(416, { "content-range": `bytes */${fileStat.size}` });
+        return res.end();
+      }
+      const body = await readFile(filePath);
+      const chunk = body.subarray(start, end + 1);
+      res.writeHead(206, {
+        "content-type": contentType,
+        "accept-ranges": "bytes",
+        "content-length": chunk.length,
+        "content-range": `bytes ${start}-${end}/${fileStat.size}`,
+        "cache-control": "public, max-age=3600"
+      });
+      return res.end(chunk);
+    }
+    const body = await readFile(filePath);
+    res.writeHead(200, {
+      "content-type": contentType,
+      "accept-ranges": "bytes",
+      "content-length": body.length,
+      "cache-control": "public, max-age=3600"
+    });
+    res.end(body);
+  } catch {
+    res.writeHead(404);
+    res.end("Not found");
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname.startsWith("/api/")) {
       const handled = await routeApi(req, res, url);
       if (handled === false) badRequest(res, "Not found.", 404);
+      return;
+    }
+    if (url.pathname.startsWith("/uploads/")) {
+      await serveUpload(req, res, url.pathname);
       return;
     }
     await serveStatic(res, url.pathname);

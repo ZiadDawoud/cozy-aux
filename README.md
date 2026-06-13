@@ -11,7 +11,9 @@ A rough technical proof for private synchronized YouTube listening/watch rooms.
 - Everyone can play/pause.
 - Only the current aux holder can load links, seek, and pass aux.
 - Shared YouTube and YouTube Music links.
+- Uploaded local audio/video files for room playback.
 - Embedded YouTube player sync.
+- Native uploaded-file player sync.
 - YouTube title/thumbnail lookup.
 - Room code and invite copying.
 - Video and audio-focus display modes.
@@ -42,10 +44,11 @@ Recommended starter deploy:
 - Start command: `npm start`
 - Environment variable: `HOST=0.0.0.0`
 
-By default, the prototype stores data in `data/cozy-aux-db.json`. For a Render
-starter test, that is enough to verify the product flow, but Render's filesystem
-can be reset by redeploys or instance replacement. Before real users, replace the
-JSON store with Postgres or another managed database.
+By default, the prototype stores data in `data/cozy-aux-db.json` and uploaded
+media in `uploads/`. For a Render starter test, that is enough to verify the
+product flow, but Render's filesystem can be reset by redeploys or instance
+replacement. Before real users, replace the JSON store with Postgres and move
+uploads to object storage like S3, Cloudflare R2, or Supabase Storage.
 
 Static hosts like GitHub Pages, Tiiny Host, and S3 will serve the HTML/CSS/JS, but
 the room API and WebSocket routes will not work.
@@ -59,5 +62,6 @@ or a raw 11-character YouTube video ID.
 
 - Accounts are passwordless browser profiles using a saved token.
 - The JSON database is a prototype persistence layer, not a production database.
-- Sync uses authoritative room timestamps and YouTube player commands, but there is no advanced drift smoothing yet.
+- Uploaded files are stored on local disk for now and are capped by `MAX_UPLOAD_BYTES`.
+- Sync uses authoritative room timestamps and player commands, but there is no advanced drift smoothing yet.
 - No queue, notifications, or real mobile app yet.
