@@ -48,7 +48,6 @@ const els = {
   mediaMeta: $("#mediaMeta"),
   artwork: $("#artwork"),
   audioArtwork: $("#audioArtwork"),
-  localPlayer: $("#localPlayer"),
   playerMount: $("#playerMount"),
   seekSlider: $("#seekSlider"),
   elapsed: $("#elapsed"),
@@ -57,8 +56,6 @@ const els = {
   pauseButton: $("#pauseButton"),
   mediaForm: $("#mediaForm"),
   mediaInput: $("#mediaInput"),
-  uploadForm: $("#uploadForm"),
-  uploadInput: $("#uploadInput"),
   videoModeButton: $("#videoModeButton"),
   audioModeButton: $("#audioModeButton"),
   chatCount: $("#chatCount"),
@@ -107,28 +104,6 @@ function currentPosition(playback) {
 
 function isAuxHolder() {
   return state.room?.auxHolderId === state.participantId;
-}
-
-function activeMedia() {
-  return state.room?.playback?.media || null;
-}
-
-function isLocalMedia(media = activeMedia()) {
-  return media?.provider === "local";
-}
-
-function activeDuration() {
-  const media = activeMedia();
-  if (!media) return 0;
-  if (isLocalMedia(media)) return Number.isFinite(els.localPlayer.duration) ? els.localPlayer.duration : 0;
-  return state.playerReady ? state.player.getDuration?.() || 0 : 0;
-}
-
-function activeCurrentTime() {
-  const media = activeMedia();
-  if (!media) return 0;
-  if (isLocalMedia(media)) return els.localPlayer.currentTime || 0;
-  return state.playerReady ? state.player.getCurrentTime?.() || 0 : 0;
 }
 
 async function api(path, options = {}) {
@@ -236,13 +211,7 @@ async function ensurePlayer() {
 }
 
 function handlePlayerStateChange(event) {
-  if (
-    Date.now() < state.suppressPlayerEventsUntil ||
-    !state.room?.playback?.media ||
-    isLocalMedia(state.room.playback.media)
-  ) {
-    return;
-  }
+  if (Date.now() < state.suppressPlayerEventsUntil || !state.room?.playback?.media) return;
   const playerState = window.YT?.PlayerState;
   if (!playerState) return;
 
@@ -300,10 +269,9 @@ function enterRoom(room) {
   );
   els.setupView.classList.add("hidden");
   els.roomView.classList.remove("hidden");
-  if (room.playback?.media?.provider === "youtube") ensurePlayer();
+  ensurePlayer();
   openEvents();
   render();
-  applyPlayback(null, room.playback);
 }
 
 function goHome() {
@@ -352,8 +320,6 @@ function openEvents() {
     const playbackChanged =
       canAffectPlayback &&
       (previousPlayback?.updatedAt !== nextRoom.playback?.updatedAt ||
-        previousPlayback?.media?.provider !== nextRoom.playback?.media?.provider ||
-        previousPlayback?.media?.id !== nextRoom.playback?.media?.id ||
         previousPlayback?.media?.videoId !== nextRoom.playback?.media?.videoId ||
         previousPlayback?.isPlaying !== nextRoom.playback?.isPlaying);
     state.room = nextRoom;
@@ -488,35 +454,14 @@ async function addFriend(event) {
 }
 
 async function applyPlayback(previous, playback) {
-  if (!playback?.media) return;
+  if (!state.playerReady || !playback?.media) return;
+  const player = await ensurePlayer();
   const nextPosition = currentPosition(playback);
-  const previousKey = previous?.media?.provider === "local" ? previous.media.id : previous?.media?.videoId;
-  const nextKey = playback.media.provider === "local" ? playback.media.id : playback.media.videoId;
-  const mediaChanged = previous?.media?.provider !== playback.media.provider || previousKey !== nextKey;
+  const mediaChanged = previous?.media?.videoId !== playback.media.videoId;
 
   state.suppressPlayerEventsUntil = Date.now() + 1200;
-  if (isLocalMedia(playback.media)) {
-    const player = els.localPlayer;
-    if (mediaChanged || state.appliedMediaId !== nextKey) {
-      state.appliedMediaId = nextKey;
-      player.src = playback.media.url;
-      player.load();
-    }
-    if (Math.abs((player.currentTime || 0) - nextPosition) > 0.6) {
-      player.currentTime = nextPosition;
-    }
-    if (playback.isPlaying) {
-      player.play().catch(() => setMessage("Press Play if your browser blocked autoplay."));
-    } else {
-      player.pause();
-    }
-    return;
-  }
-
-  const player = await ensurePlayer();
-  if (!state.playerReady) return;
-  if (mediaChanged || state.appliedMediaId !== nextKey) {
-    state.appliedMediaId = nextKey;
+  if (mediaChanged || state.appliedMediaId !== playback.media.videoId) {
+    state.appliedMediaId = playback.media.videoId;
     player.loadVideoById(playback.media.videoId, nextPosition);
   } else {
     const actual = player.getCurrentTime?.() || 0;
@@ -546,42 +491,6 @@ async function submitMedia(event) {
   setMessage("Loading link...");
   await command("media-change", { media: await enrichMedia(media) });
   setMessage("");
-}
-
-async function submitUpload(event) {
-  event.preventDefault();
-  if (!isAuxHolder()) {
-    setMessage("Only the aux holder can upload media.");
-    return;
-  }
-  const file = els.uploadInput.files?.[0];
-  if (!file) {
-    setMessage("Choose an MP3, MP4, M4A, WAV, OGG, or WebM file.");
-    return;
-  }
-  const formData = new FormData();
-  formData.append("media", file);
-  setMessage("Uploading media...");
-  try {
-    const authToken = localStorage.getItem("cozyAuxAuthToken");
-    const response = await fetch(
-      `/api/rooms/${state.room.code}/upload?participantId=${encodeURIComponent(state.participantId)}`,
-      {
-        method: "POST",
-        headers: authToken ? { "x-auth-token": authToken } : {},
-        body: formData
-      }
-    );
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Upload failed.");
-    state.room = data.room;
-    els.uploadInput.value = "";
-    render();
-    await applyPlayback(null, state.room.playback);
-    setMessage("");
-  } catch (error) {
-    setMessage(error.message);
-  }
 }
 
 function escapeHtml(value) {
@@ -655,22 +564,16 @@ function render() {
   const media = playback.media;
   els.mediaTitle.textContent = media ? media.title : "No link selected";
   els.mediaMeta.textContent = media
-    ? [media.sourceLabel, media.authorName, media.videoId || media.fileName].filter(Boolean).join(" · ")
-    : "Paste a YouTube link or upload an audio/video file to start.";
+    ? [media.sourceLabel, media.authorName, media.videoId].filter(Boolean).join(" · ")
+    : "Paste a YouTube or YouTube Music link to start.";
   els.artwork.style.backgroundImage = media?.thumbnailUrl ? `url("${media.thumbnailUrl}")` : "";
   els.audioArtwork.style.backgroundImage = media?.thumbnailUrl
     ? `url("${media.thumbnailUrl}")`
     : "";
-  els.localPlayer.classList.toggle("hidden", !isLocalMedia(media));
-  els.playerMount.classList.toggle("hidden", isLocalMedia(media));
-  els.localPlayer.controls = false;
-  if (isLocalMedia(media) && els.localPlayer.src !== new URL(media.url, location.origin).href) {
-    els.localPlayer.src = media.url;
-  }
 
   const position = currentPosition(playback);
-  const playerDuration = activeDuration();
-  const actual = activeCurrentTime();
+  const playerDuration = state.playerReady ? state.player.getDuration?.() || 0 : 0;
+  const actual = state.playerReady && media ? state.player.getCurrentTime?.() || 0 : 0;
   const drift = media ? Math.abs(actual - position) : 0;
   els.syncStatus.textContent = media ? (drift > 2.5 ? "Catching up" : "In sync") : "No media";
   els.seekSlider.max = String(playerDuration || 100);
@@ -682,11 +585,9 @@ function render() {
   els.seekSlider.disabled = !isAuxHolder() || !media;
   els.mediaInput.disabled = !isAuxHolder();
   els.mediaForm.querySelector("button").disabled = !isAuxHolder();
-  els.uploadInput.disabled = !isAuxHolder();
-  els.uploadForm.querySelector("button").disabled = !isAuxHolder();
   els.mediaInput.placeholder = isAuxHolder()
     ? "Paste YouTube or YouTube Music link"
-    : "Only the aux holder can change media";
+    : "Only the aux holder can load links";
   document.body.classList.toggle("audio-focus", state.displayMode === "audio");
   els.videoModeButton.classList.toggle("secondary", state.displayMode !== "video");
   els.audioModeButton.classList.toggle("secondary", state.displayMode !== "audio");
@@ -788,8 +689,8 @@ function renderPlaybackProgress() {
   const playback = state.room.playback;
   const media = playback.media;
   const position = currentPosition(playback);
-  const playerDuration = activeDuration();
-  const actual = activeCurrentTime();
+  const playerDuration = state.playerReady ? state.player.getDuration?.() || 0 : 0;
+  const actual = state.playerReady && media ? state.player.getCurrentTime?.() || 0 : 0;
   const drift = media ? Math.abs(actual - position) : 0;
 
   els.syncStatus.textContent = media ? (drift > 2.5 ? "Catching up" : "In sync") : "No media";
@@ -805,16 +706,12 @@ function tick() {
   if (state.room) {
     renderPlaybackProgress();
     const playback = state.room.playback;
-    if (!state.isSeeking && playback?.media && playback.isPlaying) {
+    if (!state.isSeeking && state.playerReady && playback?.media && playback.isPlaying) {
       const desired = currentPosition(playback);
-      const actual = activeCurrentTime();
+      const actual = state.player.getCurrentTime?.() || 0;
       if (Math.abs(actual - desired) > 2.5) {
         state.suppressPlayerEventsUntil = Date.now() + 1000;
-        if (isLocalMedia(playback.media)) {
-          els.localPlayer.currentTime = desired;
-        } else if (state.playerReady) {
-          state.player.seekTo(desired, true);
-        }
+        state.player.seekTo(desired, true);
       }
     }
   }
@@ -908,12 +805,12 @@ els.copyCodeButton.addEventListener("click", async () => {
 });
 els.playButton.addEventListener("click", () =>
   command("play", {
-    positionSec: activeMedia() ? activeCurrentTime() : currentPosition(state.room?.playback)
+    positionSec: state.playerReady ? state.player.getCurrentTime() : currentPosition(state.room?.playback)
   })
 );
 els.pauseButton.addEventListener("click", () =>
   command("pause", {
-    positionSec: activeMedia() ? activeCurrentTime() : currentPosition(state.room?.playback)
+    positionSec: state.playerReady ? state.player.getCurrentTime() : currentPosition(state.room?.playback)
   })
 );
 function commitSeek() {
@@ -936,16 +833,6 @@ els.seekSlider.addEventListener("input", () => {
 els.seekSlider.addEventListener("pointerup", commitSeek);
 els.seekSlider.addEventListener("touchend", commitSeek);
 els.mediaForm.addEventListener("submit", submitMedia);
-els.uploadForm.addEventListener("submit", submitUpload);
-els.localPlayer.addEventListener("loadedmetadata", renderPlaybackProgress);
-els.localPlayer.addEventListener("play", () => {
-  if (Date.now() < state.suppressPlayerEventsUntil || !isLocalMedia()) return;
-  command("play", { positionSec: activeCurrentTime() });
-});
-els.localPlayer.addEventListener("pause", () => {
-  if (Date.now() < state.suppressPlayerEventsUntil || !isLocalMedia()) return;
-  command("pause", { positionSec: activeCurrentTime() });
-});
 els.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = els.chatInput.value.trim();
