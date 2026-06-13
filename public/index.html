@@ -126,9 +126,14 @@
           <section class="side-stack">
             <div class="surface">
               <div class="section-head">
-                <h2>Shared link</h2>
+                <h2>Find media</h2>
                 <span id="syncStatus" class="status-pill">No media</span>
               </div>
+              <form id="searchForm" class="search-form">
+                <input id="searchInput" placeholder="Search YouTube" />
+                <button type="submit">Search</button>
+              </form>
+              <div id="searchResults" class="search-results"></div>
               <form id="mediaForm" class="link-form">
                 <input id="mediaInput" placeholder="Paste YouTube or YouTube Music link" />
                 <button type="submit">Load</button>

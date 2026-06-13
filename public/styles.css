@@ -242,6 +242,7 @@ h2 {
 
 .controls,
 .mode-toggle,
+.search-form,
 .link-form,
 .chat-form,
 .profile-form {
@@ -251,11 +252,59 @@ h2 {
 }
 
 .link-form,
+.search-form,
 .chat-form,
 .friend-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
+}
+
+.search-results {
+  display: grid;
+  gap: 10px;
+}
+
+.search-result {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-height: 78px;
+  padding: 8px;
+  border: 1px solid #303b3a;
+  background: #151919;
+  color: #f6f1e8;
+  text-align: left;
+}
+
+.search-result:disabled {
+  opacity: 0.55;
+}
+
+.search-thumb {
+  width: 86px;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  background: #202727 center / cover;
+}
+
+.search-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.search-copy strong {
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+
+.search-empty {
+  border: 1px dashed #303b3a;
+  border-radius: 8px;
+  padding: 12px;
+  color: #b4aaa0;
 }
 
 .profile-form button {
@@ -452,6 +501,7 @@ h2 {
   .profile-form,
   .profile-card,
   .list-row,
+  .search-form,
   .friend-form {
     grid-template-columns: 1fr;
   }

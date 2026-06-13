@@ -10,6 +10,8 @@ const publicDir = join(__dirname, "public");
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "127.0.0.1";
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
+const youtubeApiKey = process.env.YOUTUBE_API_KEY || "";
+const youtubeRegionCode = process.env.YOUTUBE_REGION_CODE || "US";
 
 const rooms = new Map();
 
@@ -301,6 +303,46 @@ async function fetchYouTubeMeta(videoId) {
   };
 }
 
+async function searchYouTube(query) {
+  if (!youtubeApiKey) {
+    const error = new Error("Add YOUTUBE_API_KEY on the server to enable YouTube search.");
+    error.status = 501;
+    throw error;
+  }
+  const response = await fetch(
+    `https://www.googleapis.com/youtube/v3/search?${new URLSearchParams({
+      part: "snippet",
+      q: query,
+      type: "video",
+      maxResults: "8",
+      safeSearch: "moderate",
+      videoEmbeddable: "true",
+      regionCode: youtubeRegionCode,
+      key: youtubeApiKey
+    })}`
+  );
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error?.message || "YouTube search failed.");
+    error.status = response.status;
+    throw error;
+  }
+  return (data.items || [])
+    .filter((item) => item.id?.videoId)
+    .map((item) => ({
+      provider: "youtube",
+      videoId: item.id.videoId,
+      url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+      title: item.snippet?.title || "YouTube result",
+      authorName: item.snippet?.channelTitle || "",
+      sourceLabel: "YouTube",
+      thumbnailUrl:
+        item.snippet?.thumbnails?.medium?.url ||
+        item.snippet?.thumbnails?.default?.url ||
+        `https://i.ytimg.com/vi/${item.id.videoId}/hqdefault.jpg`
+    }));
+}
+
 async function routeApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/users") {
     const body = await readJson(req);
@@ -383,6 +425,16 @@ async function routeApi(req, res, url) {
         thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
       }
     });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/youtube/search") {
+    const query = String(url.searchParams.get("q") || "").trim();
+    if (query.length < 2) return badRequest(res, "Search for at least 2 characters.");
+    try {
+      return sendJson(res, 200, { results: await searchYouTube(query.slice(0, 120)) });
+    } catch (error) {
+      return badRequest(res, error.message || "YouTube search failed.", error.status || 500);
+    }
   }
 
   const joinMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})\/join$/);

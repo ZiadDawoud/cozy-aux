@@ -54,6 +54,9 @@ const els = {
   duration: $("#duration"),
   playButton: $("#playButton"),
   pauseButton: $("#pauseButton"),
+  searchForm: $("#searchForm"),
+  searchInput: $("#searchInput"),
+  searchResults: $("#searchResults"),
   mediaForm: $("#mediaForm"),
   mediaInput: $("#mediaInput"),
   videoModeButton: $("#videoModeButton"),
@@ -82,6 +85,8 @@ const state = {
   isSeeking: false,
   lastSeekCommitAt: 0,
   lastRenderedMessageId: "",
+  searchResults: [],
+  searchLoading: false,
   pendingRoomCode: ""
 };
 
@@ -493,6 +498,66 @@ async function submitMedia(event) {
   setMessage("");
 }
 
+async function searchYouTube(event) {
+  event.preventDefault();
+  const query = els.searchInput.value.trim();
+  if (!query) return;
+  state.searchLoading = true;
+  state.searchResults = [];
+  renderSearchResults();
+  try {
+    const data = await api(`/api/youtube/search?q=${encodeURIComponent(query)}`);
+    state.searchResults = data.results || [];
+    if (!state.searchResults.length) setMessage("No YouTube results found.");
+    else setMessage("");
+  } catch (error) {
+    setMessage(error.message);
+  } finally {
+    state.searchLoading = false;
+    renderSearchResults();
+  }
+}
+
+async function loadSearchResult(media) {
+  if (!isAuxHolder()) {
+    setMessage("Only the aux holder can load search results.");
+    return;
+  }
+  setMessage("Loading result...");
+  const data = await command("media-change", { media });
+  if (data?.room) {
+    state.room = data.room;
+    render();
+  }
+  setMessage("");
+}
+
+function renderSearchResults() {
+  els.searchResults.innerHTML = "";
+  if (state.searchLoading) {
+    const row = document.createElement("div");
+    row.className = "search-empty";
+    row.textContent = "Searching...";
+    els.searchResults.append(row);
+    return;
+  }
+  for (const result of state.searchResults) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "search-result";
+    row.disabled = !isAuxHolder();
+    row.innerHTML = `
+      <span class="search-thumb" style="background-image: url('${escapeHtml(result.thumbnailUrl)}')"></span>
+      <span class="search-copy">
+        <strong>${escapeHtml(result.title)}</strong>
+        <span class="muted small">${escapeHtml(result.authorName || "YouTube")}</span>
+      </span>
+    `;
+    row.addEventListener("click", () => loadSearchResult(result));
+    els.searchResults.append(row);
+  }
+}
+
 function escapeHtml(value) {
   return String(value || "").replace(/[&<>"']/g, (char) => {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char];
@@ -583,14 +648,18 @@ function render() {
   els.elapsed.textContent = formatSec(position);
   els.duration.textContent = playerDuration ? formatSec(playerDuration) : "--:--";
   els.seekSlider.disabled = !isAuxHolder() || !media;
+  els.searchInput.disabled = !isAuxHolder();
+  els.searchForm.querySelector("button").disabled = !isAuxHolder() || state.searchLoading;
   els.mediaInput.disabled = !isAuxHolder();
   els.mediaForm.querySelector("button").disabled = !isAuxHolder();
+  els.searchInput.placeholder = isAuxHolder() ? "Search YouTube" : "Only the aux holder can search";
   els.mediaInput.placeholder = isAuxHolder()
     ? "Paste YouTube or YouTube Music link"
     : "Only the aux holder can load links";
   document.body.classList.toggle("audio-focus", state.displayMode === "audio");
   els.videoModeButton.classList.toggle("secondary", state.displayMode !== "video");
   els.audioModeButton.classList.toggle("secondary", state.displayMode !== "audio");
+  renderSearchResults();
   renderMessages(room.messages || []);
 
   els.friendInviteSelect.innerHTML = "";
@@ -832,6 +901,7 @@ els.seekSlider.addEventListener("input", () => {
 });
 els.seekSlider.addEventListener("pointerup", commitSeek);
 els.seekSlider.addEventListener("touchend", commitSeek);
+els.searchForm.addEventListener("submit", searchYouTube);
 els.mediaForm.addEventListener("submit", submitMedia);
 els.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();

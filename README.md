@@ -11,6 +11,7 @@ A rough technical proof for private synchronized YouTube listening/watch rooms.
 - Everyone can play/pause.
 - Only the current aux holder can load links, seek, and pass aux.
 - Shared YouTube and YouTube Music links.
+- In-room YouTube search.
 - Embedded YouTube player sync.
 - YouTube title/thumbnail lookup.
 - Room code and invite copying.
@@ -41,6 +42,8 @@ Recommended starter deploy:
 - Build command: `npm install`
 - Start command: `npm start`
 - Environment variable: `HOST=0.0.0.0`
+- Optional environment variable for in-room search: `YOUTUBE_API_KEY=<your YouTube Data API key>`
+- Optional environment variable for localized search: `YOUTUBE_REGION_CODE=US`
 
 By default, the prototype stores data in `data/cozy-aux-db.json`. For a Render
 starter test, that is enough to verify the product flow, but Render's filesystem
@@ -54,6 +57,12 @@ the room API and WebSocket routes will not work.
 
 Paste a normal YouTube URL, YouTube Music URL, short `youtu.be` URL, embed URL, shorts URL,
 or a raw 11-character YouTube video ID.
+
+## YouTube Search
+
+In-room search uses the official YouTube Data API. Create an API key in Google
+Cloud, enable YouTube Data API v3, and set `YOUTUBE_API_KEY` on the server. If
+the key is missing, paste-link loading still works.
 
 ## Prototype limits
 
