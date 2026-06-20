@@ -762,10 +762,9 @@ function render() {
   els.mediaInput.placeholder = isAuxHolder()
     ? "Paste YouTube, YouTube Music, or Google Drive link"
     : "Only the aux holder can load links";
-  document.body.classList.toggle("audio-focus", state.displayMode === "audio" && !driveMedia);
+  document.body.classList.toggle("audio-focus", state.displayMode === "audio");
   els.videoModeButton.classList.toggle("secondary", state.displayMode !== "video");
   els.audioModeButton.classList.toggle("secondary", state.displayMode !== "audio");
-  els.audioModeButton.disabled = driveMedia;
   renderSearchResults();
   renderMessages(room.messages || []);
 
