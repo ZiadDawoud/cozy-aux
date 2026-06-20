@@ -17,7 +17,7 @@ const r2AccessKeyId = process.env.R2_ACCESS_KEY_ID || "";
 const r2SecretAccessKey = process.env.R2_SECRET_ACCESS_KEY || "";
 const r2Bucket = process.env.R2_BUCKET || "cozy-aux-media";
 const r2PublicBaseUrl = process.env.R2_PUBLIC_BASE_URL || "";
-const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 250 * 1024 * 1024);
+const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 3 * 1024 * 1024 * 1024);
 
 const rooms = new Map();
 

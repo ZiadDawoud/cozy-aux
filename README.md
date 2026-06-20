@@ -50,7 +50,7 @@ Recommended starter deploy:
   - `R2_SECRET_ACCESS_KEY=<your R2 secret access key>`
   - `R2_BUCKET=cozy-aux-media`
   - `R2_PUBLIC_BASE_URL=<your public bucket URL or custom domain>`
-  - `MAX_UPLOAD_BYTES=262144000`
+  - `MAX_UPLOAD_BYTES=3221225472`
 - Optional environment variable for in-room search: `YOUTUBE_API_KEY=<your YouTube Data API key>`
 - Optional environment variable for localized search: `YOUTUBE_REGION_CODE=US`
 
