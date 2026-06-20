@@ -363,29 +363,6 @@ h2 {
   backdrop-filter: blur(10px);
 }
 
-.drive-open-link {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  z-index: 4;
-  display: inline-flex;
-  align-items: center;
-  min-height: 34px;
-  border: 1px solid rgba(246, 241, 232, 0.22);
-  border-radius: 8px;
-  padding: 0 12px;
-  background: rgba(17, 19, 19, 0.76);
-  color: #f6f1e8;
-  font-size: 0.82rem;
-  font-weight: 800;
-  text-decoration: none;
-  backdrop-filter: blur(10px);
-}
-
-.drive-open-link.hidden {
-  display: none;
-}
-
 .fullscreen-button:disabled {
   display: none;
 }
@@ -409,11 +386,6 @@ h2 {
 .player-shell:fullscreen .fullscreen-button {
   top: 16px;
   right: 16px;
-}
-
-.player-shell:fullscreen .drive-open-link {
-  right: 16px;
-  bottom: 16px;
 }
 
 .audio-artwork {

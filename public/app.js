@@ -51,7 +51,6 @@ const els = {
   playerShell: $("#playerShell"),
   playerMount: $("#playerMount"),
   drivePlayer: $("#drivePlayer"),
-  driveOpenLink: $("#driveOpenLink"),
   fullscreenButton: $("#fullscreenButton"),
   seekSlider: $("#seekSlider"),
   elapsed: $("#elapsed"),
@@ -201,22 +200,13 @@ function extractGoogleDriveFileId(value) {
   }
 }
 
-function googleDrivePreviewUrl(fileId) {
-  return `https://drive.google.com/file/d/${fileId}/preview`;
-}
-
-function googleDriveViewUrl(fileId) {
-  return `https://drive.google.com/file/d/${fileId}/view`;
-}
-
 function normalizeMedia(value) {
   const driveFileId = extractGoogleDriveFileId(value);
   if (driveFileId) {
     return {
       provider: "google-drive",
       fileId: driveFileId,
-      url: googleDrivePreviewUrl(driveFileId),
-      webUrl: googleDriveViewUrl(driveFileId),
+      url: `https://drive.google.com/file/d/${driveFileId}/preview`,
       title: "Google Drive movie",
       sourceLabel: "Google Drive",
       thumbnailUrl: ""
@@ -739,16 +729,8 @@ function render() {
     : "";
   els.playerMount.classList.toggle("hidden", driveMedia);
   els.drivePlayer.classList.toggle("hidden", !driveMedia);
-  els.driveOpenLink.classList.toggle("hidden", !driveMedia);
-  if (driveMedia) {
-    const previewUrl = media.url || googleDrivePreviewUrl(media.fileId);
-    const webUrl = media.webUrl || googleDriveViewUrl(media.fileId);
-    els.driveOpenLink.href = webUrl;
-    if (els.drivePlayer.src !== previewUrl) {
-      els.drivePlayer.src = previewUrl;
-    }
-  } else {
-    els.driveOpenLink.removeAttribute("href");
+  if (driveMedia && els.drivePlayer.src !== media.url) {
+    els.drivePlayer.src = media.url;
   }
 
   const position = currentPosition(playback);
