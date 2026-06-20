@@ -48,7 +48,9 @@ const els = {
   mediaMeta: $("#mediaMeta"),
   artwork: $("#artwork"),
   audioArtwork: $("#audioArtwork"),
+  playerShell: $("#playerShell"),
   playerMount: $("#playerMount"),
+  fullscreenButton: $("#fullscreenButton"),
   seekSlider: $("#seekSlider"),
   elapsed: $("#elapsed"),
   duration: $("#duration"),
@@ -109,6 +111,32 @@ function currentPosition(playback) {
 
 function isAuxHolder() {
   return state.room?.auxHolderId === state.participantId;
+}
+
+function isPlayerFullscreen() {
+  return document.fullscreenElement === els.playerShell;
+}
+
+async function toggleFullscreen() {
+  if (!document.fullscreenEnabled) {
+    setMessage("Fullscreen is not available in this browser.");
+    return;
+  }
+  if (isPlayerFullscreen()) {
+    await document.exitFullscreen();
+    return;
+  }
+  await els.playerShell.requestFullscreen();
+}
+
+function renderFullscreenButton() {
+  const isFullscreen = isPlayerFullscreen();
+  els.fullscreenButton.textContent = isFullscreen ? "Exit fullscreen" : "Fullscreen";
+  els.fullscreenButton.setAttribute(
+    "aria-label",
+    isFullscreen ? "Exit fullscreen" : "Enter fullscreen"
+  );
+  els.fullscreenButton.disabled = !state.room?.playback?.media;
 }
 
 async function api(path, options = {}) {
@@ -648,6 +676,7 @@ function render() {
   els.elapsed.textContent = formatSec(position);
   els.duration.textContent = playerDuration ? formatSec(playerDuration) : "--:--";
   els.seekSlider.disabled = !isAuxHolder() || !media;
+  renderFullscreenButton();
   els.searchInput.disabled = !isAuxHolder();
   els.searchForm.querySelector("button").disabled = !isAuxHolder() || state.searchLoading;
   els.mediaInput.disabled = !isAuxHolder();
@@ -837,6 +866,10 @@ els.copyFriendCodeButton.addEventListener("click", async () => {
 els.createForm.addEventListener("submit", createRoom);
 els.joinForm.addEventListener("submit", joinRoom);
 els.homeButton.addEventListener("click", goHome);
+els.fullscreenButton.addEventListener("click", () => {
+  toggleFullscreen().catch(() => setMessage("Fullscreen could not be started."));
+});
+document.addEventListener("fullscreenchange", renderFullscreenButton);
 els.endRoomButton.addEventListener("click", async () => {
   if (!state.room) return;
   const confirmEnd = window.confirm("End this room for everyone?");

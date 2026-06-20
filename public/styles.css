@@ -349,6 +349,45 @@ h2 {
   background: #050606;
 }
 
+.fullscreen-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 4;
+  min-height: 34px;
+  border: 1px solid rgba(246, 241, 232, 0.22);
+  padding: 0 12px;
+  background: rgba(17, 19, 19, 0.76);
+  color: #f6f1e8;
+  font-size: 0.82rem;
+  backdrop-filter: blur(10px);
+}
+
+.fullscreen-button:disabled {
+  display: none;
+}
+
+.player-shell:fullscreen {
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+}
+
+.player-shell:fullscreen #playerMount,
+.player-shell:fullscreen #playerMount iframe {
+  width: 100vw;
+  height: 100vh;
+}
+
+.player-shell:fullscreen .fullscreen-button {
+  top: 16px;
+  right: 16px;
+}
+
 .audio-artwork {
   display: none;
 }
