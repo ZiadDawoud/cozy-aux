@@ -11,7 +11,6 @@ A rough technical proof for private synchronized YouTube listening/watch rooms.
 - Everyone can play/pause.
 - Only the current aux holder can load links, seek, and pass aux.
 - Shared YouTube and YouTube Music links.
-- Shared Google Drive movie links with embedded preview playback.
 - In-room YouTube search.
 - Embedded YouTube player sync.
 - YouTube title/thumbnail lookup.
@@ -57,11 +56,7 @@ the room API and WebSocket routes will not work.
 ## Links
 
 Paste a normal YouTube URL, YouTube Music URL, short `youtu.be` URL, embed URL, shorts URL,
-raw 11-character YouTube video ID, or a Google Drive file share link.
-
-Google Drive files must be shared so viewers in the room have access. Drive
-videos play through Google's embedded preview player, so Cozy Aux can share and
-fullscreen the movie, but synced play/pause/seek controls remain YouTube-only.
+or a raw 11-character YouTube video ID.
 
 ## YouTube Search
 

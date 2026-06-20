@@ -591,15 +591,7 @@ async function routeApi(req, res, url) {
     } else if (body.type === "media-change" || body.type === "track-change") {
       const error = assertAux(room, participantId, "Changing media");
       if (error) return badRequest(res, error, 403);
-      if (body.media?.provider === "youtube" && !body.media?.videoId) {
-        return badRequest(res, "Paste a valid YouTube link.");
-      }
-      if (body.media?.provider === "google-drive" && !body.media?.fileId) {
-        return badRequest(res, "Paste a valid Google Drive file link.");
-      }
-      if (!["youtube", "google-drive"].includes(body.media?.provider)) {
-        return badRequest(res, "Choose a valid media source.");
-      }
+      if (!body.media?.videoId) return badRequest(res, "Paste a valid YouTube link.");
       room.playback = {
         media: body.media,
         isPlaying: true,

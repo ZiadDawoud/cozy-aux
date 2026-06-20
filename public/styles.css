@@ -414,25 +414,9 @@ h2 {
 }
 
 #playerMount,
-#playerMount iframe,
-.drive-player {
+#playerMount iframe {
   width: 100%;
   height: 100%;
-}
-
-.drive-player {
-  display: block;
-  border: 0;
-  background: #050606;
-}
-
-.drive-player.hidden {
-  display: none;
-}
-
-.player-shell:fullscreen .drive-player {
-  width: 100vw;
-  height: 100vh;
 }
 
 .participants {
