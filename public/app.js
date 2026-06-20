@@ -85,6 +85,7 @@ const state = {
   savedRooms: [],
   storageConfig: null,
   mediaLibrary: [],
+  mediaLibraryError: "",
   events: null,
   player: null,
   playerReady: false,
@@ -445,8 +446,14 @@ async function loadStorageConfig() {
 }
 
 async function loadMediaLibrary() {
-  const data = await api("/api/storage/library").catch(() => ({ media: [] }));
-  state.mediaLibrary = data.media || [];
+  try {
+    const data = await api("/api/storage/library");
+    state.mediaLibrary = data.media || [];
+    state.mediaLibraryError = "";
+  } catch (error) {
+    state.mediaLibrary = [];
+    state.mediaLibraryError = error.message;
+  }
 }
 
 function uploadExtension(file) {
@@ -897,7 +904,8 @@ function render() {
   if (!state.mediaLibrary.length) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = state.storageConfig ? "No saved media found" : "Connect R2 to load saved media";
+    option.textContent =
+      state.mediaLibraryError || (state.storageConfig ? "No saved media found" : "Connect R2 to load saved media");
     els.librarySelect.append(option);
   } else {
     for (const item of state.mediaLibrary) {

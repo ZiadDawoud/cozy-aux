@@ -258,7 +258,10 @@ async function listR2Media() {
   const response = await fetch(listUrl);
   const xml = await response.text();
   if (!response.ok) {
-    const error = new Error("Could not load the R2 media library.");
+    const details = xml.match(/<Message>([\s\S]*?)<\/Message>/)?.[1] || xml.match(/<Code>([\s\S]*?)<\/Code>/)?.[1] || "";
+    const error = new Error(
+      `Could not load the R2 media library. R2 returned ${response.status}${details ? `: ${decodeXml(details)}` : ""}.`
+    );
     error.status = response.status;
     throw error;
   }
