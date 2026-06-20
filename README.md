@@ -11,7 +11,7 @@ A rough technical proof for private synchronized YouTube listening/watch rooms.
 - Everyone can play/pause.
 - Only the current aux holder can load links, seek, and pass aux.
 - Shared YouTube and YouTube Music links.
-- Supabase Storage uploads for local audio/video files.
+- Cloudflare R2 uploads for local audio/video files.
 - In-room YouTube search.
 - Embedded YouTube player sync.
 - Native uploaded-file player sync.
@@ -44,10 +44,12 @@ Recommended starter deploy:
 - Build command: `npm install`
 - Start command: `npm start`
 - Environment variable: `HOST=0.0.0.0`
-- Optional environment variables for Supabase uploads:
-  - `SUPABASE_URL=<your project URL>`
-  - `SUPABASE_ANON_KEY=<your anon public key>`
-  - `SUPABASE_BUCKET=cozy-aux-media`
+- Optional environment variables for Cloudflare R2 uploads:
+  - `R2_ACCOUNT_ID=<your Cloudflare account ID>`
+  - `R2_ACCESS_KEY_ID=<your R2 access key ID>`
+  - `R2_SECRET_ACCESS_KEY=<your R2 secret access key>`
+  - `R2_BUCKET=cozy-aux-media`
+  - `R2_PUBLIC_BASE_URL=<your public bucket URL or custom domain>`
   - `MAX_UPLOAD_BYTES=262144000`
 - Optional environment variable for in-room search: `YOUTUBE_API_KEY=<your YouTube Data API key>`
 - Optional environment variable for localized search: `YOUTUBE_REGION_CODE=US`
@@ -71,15 +73,30 @@ In-room search uses the official YouTube Data API. Create an API key in Google
 Cloud, enable YouTube Data API v3, and set `YOUTUBE_API_KEY` on the server. If
 the key is missing, paste-link loading still works.
 
-## Supabase Uploads
+## Cloudflare R2 Uploads
 
-Create a Supabase Storage bucket, for example `cozy-aux-media`, and make it
-public for prototype testing. Add an insert policy that allows browser uploads
-using the anon key, then set the Supabase environment variables above on Render.
+Create a Cloudflare R2 bucket, for example `cozy-aux-media`, and enable public
+access through an `r2.dev` public URL or a custom domain. Create an R2 API token
+with object read/write access for that bucket, then set the R2 environment
+variables above on Render.
 
-Uploaded files are stored directly in Supabase from the browser, then Cozy Aux
-saves the public file URL in the room. Supported formats are MP3, M4A, WAV, OGG,
-MP4, and WebM.
+The server creates a short-lived signed upload URL, the browser uploads directly
+to R2, and Cozy Aux saves the public file URL in the room. Supported formats are
+MP3, M4A, WAV, OGG, MP4, and WebM.
+
+Add CORS to the R2 bucket so the browser can upload from your app:
+
+```json
+[
+  {
+    "AllowedOrigins": ["http://127.0.0.1:3000", "https://your-render-app.onrender.com"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["content-type"],
+    "ExposeHeaders": ["etag"],
+    "MaxAgeSeconds": 3000
+  }
+]
+```
 
 ## Prototype limits
 

@@ -1,5 +1,5 @@
 import http from "node:http";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,9 +12,11 @@ const host = process.env.HOST || "127.0.0.1";
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
 const youtubeApiKey = process.env.YOUTUBE_API_KEY || "";
 const youtubeRegionCode = process.env.YOUTUBE_REGION_CODE || "US";
-const supabaseUrl = process.env.SUPABASE_URL || "";
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
-const supabaseBucket = process.env.SUPABASE_BUCKET || "cozy-aux-media";
+const r2AccountId = process.env.R2_ACCOUNT_ID || "";
+const r2AccessKeyId = process.env.R2_ACCESS_KEY_ID || "";
+const r2SecretAccessKey = process.env.R2_SECRET_ACCESS_KEY || "";
+const r2Bucket = process.env.R2_BUCKET || "cozy-aux-media";
+const r2PublicBaseUrl = process.env.R2_PUBLIC_BASE_URL || "";
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 250 * 1024 * 1024);
 
 const rooms = new Map();
@@ -132,6 +134,71 @@ function sendJson(res, status, body) {
 
 function badRequest(res, message, status = 400) {
   sendJson(res, status, { error: message });
+}
+
+function storageConfigured() {
+  return Boolean(r2AccountId && r2AccessKeyId && r2SecretAccessKey && r2Bucket && r2PublicBaseUrl);
+}
+
+function awsEncode(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
+function hmac(key, value, encoding) {
+  return createHmac("sha256", key).update(value).digest(encoding);
+}
+
+function signR2Upload({ objectPath, contentType, expiresSec = 900 }) {
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/auto/s3/aws4_request`;
+  const hostName = `${r2AccountId}.r2.cloudflarestorage.com`;
+  const canonicalUri = `/${awsEncode(r2Bucket)}/${objectPath.split("/").map(awsEncode).join("/")}`;
+  const query = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": `${r2AccessKeyId}/${scope}`,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(expiresSec),
+    "X-Amz-SignedHeaders": "content-type;host"
+  };
+  const canonicalQuery = Object.keys(query)
+    .sort()
+    .map((key) => `${awsEncode(key)}=${awsEncode(query[key])}`)
+    .join("&");
+  const canonicalHeaders = `content-type:${contentType}\nhost:${hostName}\n`;
+  const canonicalRequest = [
+    "PUT",
+    canonicalUri,
+    canonicalQuery,
+    canonicalHeaders,
+    "content-type;host",
+    "UNSIGNED-PAYLOAD"
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    scope,
+    createHash("sha256").update(canonicalRequest).digest("hex")
+  ].join("\n");
+  const dateKey = hmac(`AWS4${r2SecretAccessKey}`, dateStamp);
+  const regionKey = hmac(dateKey, "auto");
+  const serviceKey = hmac(regionKey, "s3");
+  const signingKey = hmac(serviceKey, "aws4_request");
+  const signature = hmac(signingKey, stringToSign, "hex");
+  return `https://${hostName}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
+function uploadExtension(fileName, contentType) {
+  const nameExtension = String(fileName || "").match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase();
+  if (nameExtension) return nameExtension;
+  if (contentType === "audio/mpeg") return ".mp3";
+  if (contentType === "audio/mp4") return ".m4a";
+  if (contentType === "video/mp4") return ".mp4";
+  if (contentType === "video/webm") return ".webm";
+  return "";
 }
 
 function encodeWebSocketFrame(text) {
@@ -442,17 +509,53 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/storage/config") {
-    const configured = Boolean(supabaseUrl && supabaseAnonKey && supabaseBucket);
+    const configured = storageConfigured();
     return sendJson(res, 200, {
       configured,
       storage: configured
         ? {
-            supabaseUrl,
-            anonKey: supabaseAnonKey,
-            bucket: supabaseBucket,
+            provider: "r2",
+            bucket: r2Bucket,
             maxUploadBytes
           }
         : null
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/storage/upload-url") {
+    if (!storageConfigured()) return badRequest(res, "Add Cloudflare R2 environment variables first.", 501);
+    const user = requireUser(req, res);
+    if (!user) return;
+    const body = await readJson(req);
+    const room = getRoom(body.roomCode);
+    if (!room || room.endedAt) return badRequest(res, "Room not found.", 404);
+    const participant = room.participants.get(body.participantId);
+    if (!participant || participant.userId !== user.id) return badRequest(res, "Participant not in room.", 403);
+    const error = assertAux(room, body.participantId, "Uploading media");
+    if (error) return badRequest(res, error, 403);
+
+    const fileName = String(body.fileName || "upload").slice(0, 180);
+    const contentType = String(body.contentType || "application/octet-stream").slice(0, 120);
+    const sizeBytes = Number(body.sizeBytes || 0);
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return badRequest(res, "Choose a valid media file.");
+    if (sizeBytes > maxUploadBytes) {
+      return badRequest(res, `File is too large. Limit is ${Math.floor(maxUploadBytes / 1024 / 1024)} MB.`);
+    }
+    const extension = uploadExtension(fileName, contentType);
+    if (![".mp3", ".m4a", ".wav", ".ogg", ".mp4", ".webm"].includes(extension)) {
+      return badRequest(res, "Choose an MP3, M4A, WAV, OGG, MP4, or WebM file.");
+    }
+
+    const objectPath = `${room.code}/${randomUUID()}${extension}`;
+    const publicBase = r2PublicBaseUrl.replace(/\/$/, "");
+    return sendJson(res, 200, {
+      upload: {
+        method: "PUT",
+        url: signR2Upload({ objectPath, contentType }),
+        headers: { "content-type": contentType },
+        objectPath,
+        publicUrl: `${publicBase}/${objectPath}`
+      }
     });
   }
 
@@ -610,14 +713,14 @@ async function routeApi(req, res, url) {
     } else if (body.type === "media-change" || body.type === "track-change") {
       const error = assertAux(room, participantId, "Changing media");
       if (error) return badRequest(res, error, 403);
-      if (!["youtube", "supabase"].includes(body.media?.provider)) {
+      if (!["youtube", "r2"].includes(body.media?.provider)) {
         return badRequest(res, "Choose a valid media source.");
       }
       if (body.media?.provider === "youtube" && !body.media?.videoId) {
         return badRequest(res, "Paste a valid YouTube link.");
       }
-      if (body.media?.provider === "supabase" && !body.media?.url) {
-        return badRequest(res, "Upload a valid Supabase media file.");
+      if (body.media?.provider === "r2" && !body.media?.url) {
+        return badRequest(res, "Upload a valid R2 media file.");
       }
       room.playback = {
         media: body.media,

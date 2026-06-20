@@ -122,7 +122,7 @@ function activeMedia() {
 }
 
 function isHostedMedia(media = activeMedia()) {
-  return media?.provider === "supabase";
+  return media?.provider === "r2";
 }
 
 function isYouTubeMedia(media = activeMedia()) {
@@ -340,7 +340,7 @@ function enterRoom(room) {
   );
   els.setupView.classList.add("hidden");
   els.roomView.classList.remove("hidden");
-  if (room.playback?.media?.provider !== "supabase") ensurePlayer();
+  if (!isHostedMedia(room.playback?.media)) ensurePlayer();
   openEvents();
   render();
   applyPlayback(null, state.room.playback);
@@ -455,9 +455,9 @@ function hostedMediaType(file) {
   return file.type.startsWith("video/") ? "video" : "audio";
 }
 
-async function uploadToSupabase(file) {
+async function uploadToR2(file) {
   const config = state.storageConfig;
-  if (!config) throw new Error("Add Supabase storage environment variables before uploading.");
+  if (!config) throw new Error("Add Cloudflare R2 environment variables before uploading.");
   if (file.size > config.maxUploadBytes) {
     throw new Error(`File is too large. Limit is ${Math.floor(config.maxUploadBytes / 1024 / 1024)} MB.`);
   }
@@ -466,29 +466,30 @@ async function uploadToSupabase(file) {
     throw new Error("Choose an MP3, M4A, WAV, OGG, MP4, or WebM file.");
   }
 
-  const objectPath = `${state.room.code}/${crypto.randomUUID()}${extension}`;
-  const baseUrl = config.supabaseUrl.replace(/\/$/, "");
-  const uploadUrl = `${baseUrl}/storage/v1/object/${encodeURIComponent(config.bucket)}/${objectPath}`;
-  const response = await fetch(uploadUrl, {
+  const ticket = await api("/api/storage/upload-url", {
     method: "POST",
-    headers: {
-      apikey: config.anonKey,
-      authorization: `Bearer ${config.anonKey}`,
-      "content-type": file.type || "application/octet-stream",
-      "x-upsert": "false"
-    },
+    body: JSON.stringify({
+      roomCode: state.room.code,
+      participantId: state.participantId,
+      fileName: file.name,
+      contentType: file.type || "application/octet-stream",
+      sizeBytes: file.size
+    })
+  });
+  const response = await fetch(ticket.upload.url, {
+    method: ticket.upload.method,
+    headers: ticket.upload.headers,
     body: file
   });
-  const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.error || body.message || "Supabase upload failed.");
+    throw new Error("Cloudflare R2 upload failed. Check bucket CORS and public access.");
   }
 
   return {
-    provider: "supabase",
+    provider: "r2",
     mediaType: hostedMediaType(file),
-    path: objectPath,
-    url: `${baseUrl}/storage/v1/object/public/${encodeURIComponent(config.bucket)}/${objectPath}`,
+    path: ticket.upload.objectPath,
+    url: ticket.upload.publicUrl,
     title: file.name.replace(/\.[^.]+$/, "") || "Uploaded media",
     sourceLabel: hostedMediaType(file) === "video" ? "Uploaded video" : "Uploaded audio",
     fileName: file.name,
@@ -592,8 +593,8 @@ async function addFriend(event) {
 async function applyPlayback(previous, playback) {
   if (!playback?.media) return;
   const nextPosition = currentPosition(playback);
-  const previousKey = previous?.media?.provider === "supabase" ? previous.media.path : previous?.media?.videoId;
-  const nextKey = playback.media.provider === "supabase" ? playback.media.path : playback.media.videoId;
+  const previousKey = previous?.media?.provider === "r2" ? previous.media.path : previous?.media?.videoId;
+  const nextKey = playback.media.provider === "r2" ? playback.media.path : playback.media.videoId;
   const mediaChanged = previous?.media?.provider !== playback.media.provider || previousKey !== nextKey;
 
   state.suppressPlayerEventsUntil = Date.now() + 1200;
@@ -667,8 +668,8 @@ async function submitUpload(event) {
     return;
   }
   try {
-    setMessage("Uploading to Supabase...");
-    const media = await uploadToSupabase(file);
+    setMessage("Uploading to Cloudflare R2...");
+    const media = await uploadToR2(file);
     const data = await command("media-change", { media });
     if (data?.room) {
       state.room = data.room;
