@@ -100,12 +100,13 @@
               <div id="artwork" class="artwork"></div>
               <div class="track-copy">
                 <p id="mediaTitle" class="track-name">No link selected</p>
-                <p id="mediaMeta" class="muted">Paste a YouTube or YouTube Music link to start.</p>
+                <p id="mediaMeta" class="muted">Paste a YouTube link or upload a media file to start.</p>
               </div>
             </div>
 
             <div id="playerShell" class="player-shell">
               <div id="audioArtwork" class="audio-artwork"></div>
+              <video id="hostedPlayer" class="hosted-player hidden" playsinline></video>
               <div id="playerMount"></div>
               <button id="fullscreenButton" class="fullscreen-button" type="button" aria-label="Enter fullscreen">
                 Fullscreen
@@ -140,6 +141,10 @@
               <form id="mediaForm" class="link-form">
                 <input id="mediaInput" placeholder="Paste YouTube or YouTube Music link" />
                 <button type="submit">Load</button>
+              </form>
+              <form id="uploadForm" class="upload-form">
+                <input id="uploadInput" type="file" accept="audio/*,video/mp4,video/webm" />
+                <button type="submit">Upload</button>
               </form>
               <div class="mode-toggle">
                 <button id="videoModeButton" type="button">Video</button>

@@ -49,6 +49,7 @@ const els = {
   artwork: $("#artwork"),
   audioArtwork: $("#audioArtwork"),
   playerShell: $("#playerShell"),
+  hostedPlayer: $("#hostedPlayer"),
   playerMount: $("#playerMount"),
   fullscreenButton: $("#fullscreenButton"),
   seekSlider: $("#seekSlider"),
@@ -61,6 +62,8 @@ const els = {
   searchResults: $("#searchResults"),
   mediaForm: $("#mediaForm"),
   mediaInput: $("#mediaInput"),
+  uploadForm: $("#uploadForm"),
+  uploadInput: $("#uploadInput"),
   videoModeButton: $("#videoModeButton"),
   audioModeButton: $("#audioModeButton"),
   chatCount: $("#chatCount"),
@@ -78,6 +81,7 @@ const state = {
   friends: [],
   invites: [],
   savedRooms: [],
+  storageConfig: null,
   events: null,
   player: null,
   playerReady: false,
@@ -111,6 +115,34 @@ function currentPosition(playback) {
 
 function isAuxHolder() {
   return state.room?.auxHolderId === state.participantId;
+}
+
+function activeMedia() {
+  return state.room?.playback?.media || null;
+}
+
+function isHostedMedia(media = activeMedia()) {
+  return media?.provider === "supabase";
+}
+
+function isYouTubeMedia(media = activeMedia()) {
+  return !media || media.provider === "youtube";
+}
+
+function activeDuration() {
+  const media = activeMedia();
+  if (!media) return 0;
+  if (isHostedMedia(media)) {
+    return Number.isFinite(els.hostedPlayer.duration) ? els.hostedPlayer.duration : 0;
+  }
+  return state.playerReady ? state.player.getDuration?.() || 0 : 0;
+}
+
+function activeCurrentTime() {
+  const media = activeMedia();
+  if (!media) return 0;
+  if (isHostedMedia(media)) return els.hostedPlayer.currentTime || 0;
+  return state.playerReady ? state.player.getCurrentTime?.() || 0 : 0;
 }
 
 function isPlayerFullscreen() {
@@ -244,7 +276,13 @@ async function ensurePlayer() {
 }
 
 function handlePlayerStateChange(event) {
-  if (Date.now() < state.suppressPlayerEventsUntil || !state.room?.playback?.media) return;
+  if (
+    Date.now() < state.suppressPlayerEventsUntil ||
+    !state.room?.playback?.media ||
+    !isYouTubeMedia(state.room.playback.media)
+  ) {
+    return;
+  }
   const playerState = window.YT?.PlayerState;
   if (!playerState) return;
 
@@ -302,9 +340,10 @@ function enterRoom(room) {
   );
   els.setupView.classList.add("hidden");
   els.roomView.classList.remove("hidden");
-  ensurePlayer();
+  if (room.playback?.media?.provider !== "supabase") ensurePlayer();
   openEvents();
   render();
+  applyPlayback(null, state.room.playback);
 }
 
 function goHome() {
@@ -353,7 +392,9 @@ function openEvents() {
     const playbackChanged =
       canAffectPlayback &&
       (previousPlayback?.updatedAt !== nextRoom.playback?.updatedAt ||
+        previousPlayback?.media?.provider !== nextRoom.playback?.media?.provider ||
         previousPlayback?.media?.videoId !== nextRoom.playback?.media?.videoId ||
+        previousPlayback?.media?.path !== nextRoom.playback?.media?.path ||
         previousPlayback?.isPlaying !== nextRoom.playback?.isPlaying);
     state.room = nextRoom;
     render();
@@ -393,6 +434,68 @@ async function loadAccount() {
     els.joinName.value = state.name;
   }
   renderAccount();
+}
+
+async function loadStorageConfig() {
+  const data = await api("/api/storage/config").catch(() => ({ configured: false }));
+  state.storageConfig = data.configured ? data.storage : null;
+}
+
+function uploadExtension(file) {
+  const nameExtension = file.name.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase();
+  if (nameExtension) return nameExtension;
+  if (file.type === "audio/mpeg") return ".mp3";
+  if (file.type === "audio/mp4") return ".m4a";
+  if (file.type === "video/mp4") return ".mp4";
+  if (file.type === "video/webm") return ".webm";
+  return "";
+}
+
+function hostedMediaType(file) {
+  return file.type.startsWith("video/") ? "video" : "audio";
+}
+
+async function uploadToSupabase(file) {
+  const config = state.storageConfig;
+  if (!config) throw new Error("Add Supabase storage environment variables before uploading.");
+  if (file.size > config.maxUploadBytes) {
+    throw new Error(`File is too large. Limit is ${Math.floor(config.maxUploadBytes / 1024 / 1024)} MB.`);
+  }
+  const extension = uploadExtension(file);
+  if (![".mp3", ".m4a", ".wav", ".ogg", ".mp4", ".webm"].includes(extension)) {
+    throw new Error("Choose an MP3, M4A, WAV, OGG, MP4, or WebM file.");
+  }
+
+  const objectPath = `${state.room.code}/${crypto.randomUUID()}${extension}`;
+  const baseUrl = config.supabaseUrl.replace(/\/$/, "");
+  const uploadUrl = `${baseUrl}/storage/v1/object/${encodeURIComponent(config.bucket)}/${objectPath}`;
+  const response = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      apikey: config.anonKey,
+      authorization: `Bearer ${config.anonKey}`,
+      "content-type": file.type || "application/octet-stream",
+      "x-upsert": "false"
+    },
+    body: file
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.error || body.message || "Supabase upload failed.");
+  }
+
+  return {
+    provider: "supabase",
+    mediaType: hostedMediaType(file),
+    path: objectPath,
+    url: `${baseUrl}/storage/v1/object/public/${encodeURIComponent(config.bucket)}/${objectPath}`,
+    title: file.name.replace(/\.[^.]+$/, "") || "Uploaded media",
+    sourceLabel: hostedMediaType(file) === "video" ? "Uploaded video" : "Uploaded audio",
+    fileName: file.name,
+    sizeBytes: file.size,
+    mimeType: file.type || "application/octet-stream",
+    thumbnailUrl: ""
+  };
 }
 
 function renderAccount() {
@@ -487,14 +590,40 @@ async function addFriend(event) {
 }
 
 async function applyPlayback(previous, playback) {
-  if (!state.playerReady || !playback?.media) return;
-  const player = await ensurePlayer();
+  if (!playback?.media) return;
   const nextPosition = currentPosition(playback);
-  const mediaChanged = previous?.media?.videoId !== playback.media.videoId;
+  const previousKey = previous?.media?.provider === "supabase" ? previous.media.path : previous?.media?.videoId;
+  const nextKey = playback.media.provider === "supabase" ? playback.media.path : playback.media.videoId;
+  const mediaChanged = previous?.media?.provider !== playback.media.provider || previousKey !== nextKey;
 
   state.suppressPlayerEventsUntil = Date.now() + 1200;
-  if (mediaChanged || state.appliedMediaId !== playback.media.videoId) {
-    state.appliedMediaId = playback.media.videoId;
+  if (isHostedMedia(playback.media)) {
+    const player = els.hostedPlayer;
+    if (state.playerReady) {
+      state.suppressPlayerEventsUntil = Date.now() + 1200;
+      state.player.pauseVideo();
+    }
+    if (mediaChanged || state.appliedMediaId !== nextKey) {
+      state.appliedMediaId = nextKey;
+      player.src = playback.media.url;
+      player.load();
+    }
+    if (Math.abs((player.currentTime || 0) - nextPosition) > 0.6) {
+      player.currentTime = nextPosition;
+    }
+    if (playback.isPlaying) {
+      player.play().catch(() => setMessage("Press Play if your browser blocked autoplay."));
+    } else {
+      player.pause();
+    }
+    return;
+  }
+
+  els.hostedPlayer.pause();
+  const player = await ensurePlayer();
+  if (!state.playerReady) return;
+  if (mediaChanged || state.appliedMediaId !== nextKey) {
+    state.appliedMediaId = nextKey;
     player.loadVideoById(playback.media.videoId, nextPosition);
   } else {
     const actual = player.getCurrentTime?.() || 0;
@@ -524,6 +653,33 @@ async function submitMedia(event) {
   setMessage("Loading link...");
   await command("media-change", { media: await enrichMedia(media) });
   setMessage("");
+}
+
+async function submitUpload(event) {
+  event.preventDefault();
+  if (!isAuxHolder()) {
+    setMessage("Only the aux holder can upload media.");
+    return;
+  }
+  const file = els.uploadInput.files?.[0];
+  if (!file) {
+    setMessage("Choose an MP3, MP4, M4A, WAV, OGG, or WebM file.");
+    return;
+  }
+  try {
+    setMessage("Uploading to Supabase...");
+    const media = await uploadToSupabase(file);
+    const data = await command("media-change", { media });
+    if (data?.room) {
+      state.room = data.room;
+      els.uploadInput.value = "";
+      render();
+      await applyPlayback(null, state.room.playback);
+    }
+    setMessage("");
+  } catch (error) {
+    setMessage(error.message);
+  }
 }
 
 async function searchYouTube(event) {
@@ -655,18 +811,25 @@ function render() {
 
   const playback = room.playback;
   const media = playback.media;
+  const hostedMedia = isHostedMedia(media);
   els.mediaTitle.textContent = media ? media.title : "No link selected";
   els.mediaMeta.textContent = media
-    ? [media.sourceLabel, media.authorName, media.videoId].filter(Boolean).join(" · ")
-    : "Paste a YouTube or YouTube Music link to start.";
+    ? [media.sourceLabel, media.authorName, media.videoId || media.fileName].filter(Boolean).join(" · ")
+    : "Paste a YouTube link or upload a media file to start.";
   els.artwork.style.backgroundImage = media?.thumbnailUrl ? `url("${media.thumbnailUrl}")` : "";
   els.audioArtwork.style.backgroundImage = media?.thumbnailUrl
     ? `url("${media.thumbnailUrl}")`
     : "";
+  els.hostedPlayer.classList.toggle("hidden", !hostedMedia);
+  els.playerMount.classList.toggle("hidden", hostedMedia);
+  els.hostedPlayer.controls = false;
+  if (hostedMedia && els.hostedPlayer.src !== media.url) {
+    els.hostedPlayer.src = media.url;
+  }
 
   const position = currentPosition(playback);
-  const playerDuration = state.playerReady ? state.player.getDuration?.() || 0 : 0;
-  const actual = state.playerReady && media ? state.player.getCurrentTime?.() || 0 : 0;
+  const playerDuration = activeDuration();
+  const actual = activeCurrentTime();
   const drift = media ? Math.abs(actual - position) : 0;
   els.syncStatus.textContent = media ? (drift > 2.5 ? "Catching up" : "In sync") : "No media";
   els.seekSlider.max = String(playerDuration || 100);
@@ -681,6 +844,8 @@ function render() {
   els.searchForm.querySelector("button").disabled = !isAuxHolder() || state.searchLoading;
   els.mediaInput.disabled = !isAuxHolder();
   els.mediaForm.querySelector("button").disabled = !isAuxHolder();
+  els.uploadInput.disabled = !isAuxHolder() || !state.storageConfig;
+  els.uploadForm.querySelector("button").disabled = !isAuxHolder() || !state.storageConfig;
   els.searchInput.placeholder = isAuxHolder() ? "Search YouTube" : "Only the aux holder can search";
   els.mediaInput.placeholder = isAuxHolder()
     ? "Paste YouTube or YouTube Music link"
@@ -787,8 +952,8 @@ function renderPlaybackProgress() {
   const playback = state.room.playback;
   const media = playback.media;
   const position = currentPosition(playback);
-  const playerDuration = state.playerReady ? state.player.getDuration?.() || 0 : 0;
-  const actual = state.playerReady && media ? state.player.getCurrentTime?.() || 0 : 0;
+  const playerDuration = activeDuration();
+  const actual = activeCurrentTime();
   const drift = media ? Math.abs(actual - position) : 0;
 
   els.syncStatus.textContent = media ? (drift > 2.5 ? "Catching up" : "In sync") : "No media";
@@ -804,12 +969,16 @@ function tick() {
   if (state.room) {
     renderPlaybackProgress();
     const playback = state.room.playback;
-    if (!state.isSeeking && state.playerReady && playback?.media && playback.isPlaying) {
+    if (!state.isSeeking && playback?.media && playback.isPlaying) {
       const desired = currentPosition(playback);
-      const actual = state.player.getCurrentTime?.() || 0;
+      const actual = activeCurrentTime();
       if (Math.abs(actual - desired) > 2.5) {
         state.suppressPlayerEventsUntil = Date.now() + 1000;
-        state.player.seekTo(desired, true);
+        if (isHostedMedia(playback.media)) {
+          els.hostedPlayer.currentTime = desired;
+        } else if (state.playerReady) {
+          state.player.seekTo(desired, true);
+        }
       }
     }
   }
@@ -847,6 +1016,7 @@ async function restoreRoomFromUrl(params) {
 }
 
 async function init() {
+  await loadStorageConfig();
   await loadAccount();
   const params = new URLSearchParams(location.search);
   await restoreRoomFromUrl(params);
@@ -907,12 +1077,12 @@ els.copyCodeButton.addEventListener("click", async () => {
 });
 els.playButton.addEventListener("click", () =>
   command("play", {
-    positionSec: state.playerReady ? state.player.getCurrentTime() : currentPosition(state.room?.playback)
+    positionSec: activeMedia() ? activeCurrentTime() : currentPosition(state.room?.playback)
   })
 );
 els.pauseButton.addEventListener("click", () =>
   command("pause", {
-    positionSec: state.playerReady ? state.player.getCurrentTime() : currentPosition(state.room?.playback)
+    positionSec: activeMedia() ? activeCurrentTime() : currentPosition(state.room?.playback)
   })
 );
 function commitSeek() {
@@ -936,6 +1106,16 @@ els.seekSlider.addEventListener("pointerup", commitSeek);
 els.seekSlider.addEventListener("touchend", commitSeek);
 els.searchForm.addEventListener("submit", searchYouTube);
 els.mediaForm.addEventListener("submit", submitMedia);
+els.uploadForm.addEventListener("submit", submitUpload);
+els.hostedPlayer.addEventListener("loadedmetadata", renderPlaybackProgress);
+els.hostedPlayer.addEventListener("play", () => {
+  if (Date.now() < state.suppressPlayerEventsUntil || !isHostedMedia()) return;
+  command("play", { positionSec: activeCurrentTime() });
+});
+els.hostedPlayer.addEventListener("pause", () => {
+  if (Date.now() < state.suppressPlayerEventsUntil || !isHostedMedia()) return;
+  command("pause", { positionSec: activeCurrentTime() });
+});
 els.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = els.chatInput.value.trim();

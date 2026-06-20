@@ -12,6 +12,10 @@ const host = process.env.HOST || "127.0.0.1";
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
 const youtubeApiKey = process.env.YOUTUBE_API_KEY || "";
 const youtubeRegionCode = process.env.YOUTUBE_REGION_CODE || "US";
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
+const supabaseBucket = process.env.SUPABASE_BUCKET || "cozy-aux-media";
+const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 250 * 1024 * 1024);
 
 const rooms = new Map();
 
@@ -437,6 +441,21 @@ async function routeApi(req, res, url) {
     }
   }
 
+  if (req.method === "GET" && url.pathname === "/api/storage/config") {
+    const configured = Boolean(supabaseUrl && supabaseAnonKey && supabaseBucket);
+    return sendJson(res, 200, {
+      configured,
+      storage: configured
+        ? {
+            supabaseUrl,
+            anonKey: supabaseAnonKey,
+            bucket: supabaseBucket,
+            maxUploadBytes
+          }
+        : null
+    });
+  }
+
   const joinMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})\/join$/);
   if (req.method === "POST" && joinMatch) {
     const room = getRoom(joinMatch[1]);
@@ -591,7 +610,15 @@ async function routeApi(req, res, url) {
     } else if (body.type === "media-change" || body.type === "track-change") {
       const error = assertAux(room, participantId, "Changing media");
       if (error) return badRequest(res, error, 403);
-      if (!body.media?.videoId) return badRequest(res, "Paste a valid YouTube link.");
+      if (!["youtube", "supabase"].includes(body.media?.provider)) {
+        return badRequest(res, "Choose a valid media source.");
+      }
+      if (body.media?.provider === "youtube" && !body.media?.videoId) {
+        return badRequest(res, "Paste a valid YouTube link.");
+      }
+      if (body.media?.provider === "supabase" && !body.media?.url) {
+        return badRequest(res, "Upload a valid Supabase media file.");
+      }
       room.playback = {
         media: body.media,
         isPlaying: true,
