@@ -244,6 +244,7 @@ h2 {
 .mode-toggle,
 .search-form,
 .link-form,
+.library-form,
 .upload-form,
 .chat-form,
 .profile-form {
@@ -254,6 +255,7 @@ h2 {
 
 .link-form,
 .search-form,
+.library-form,
 .upload-form,
 .chat-form,
 .friend-form {

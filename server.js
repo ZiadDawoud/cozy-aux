@@ -150,31 +150,36 @@ function hmac(key, value, encoding) {
   return createHmac("sha256", key).update(value).digest(encoding);
 }
 
-function signR2Upload({ objectPath, contentType, expiresSec = 900 }) {
+function signR2Request({ method, objectPath = "", queryParams = {}, signedHeaders, headers, expiresSec = 900 }) {
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
   const dateStamp = amzDate.slice(0, 8);
   const scope = `${dateStamp}/auto/s3/aws4_request`;
   const hostName = `${r2AccountId}.r2.cloudflarestorage.com`;
-  const canonicalUri = `/${awsEncode(r2Bucket)}/${objectPath.split("/").map(awsEncode).join("/")}`;
+  const path = objectPath ? `/${objectPath.split("/").map(awsEncode).join("/")}` : "";
+  const canonicalUri = `/${awsEncode(r2Bucket)}${path}`;
   const query = {
+    ...queryParams,
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
     "X-Amz-Credential": `${r2AccessKeyId}/${scope}`,
     "X-Amz-Date": amzDate,
     "X-Amz-Expires": String(expiresSec),
-    "X-Amz-SignedHeaders": "content-type;host"
+    "X-Amz-SignedHeaders": signedHeaders
   };
   const canonicalQuery = Object.keys(query)
     .sort()
     .map((key) => `${awsEncode(key)}=${awsEncode(query[key])}`)
     .join("&");
-  const canonicalHeaders = `content-type:${contentType}\nhost:${hostName}\n`;
+  const canonicalHeaders = Object.keys(headers)
+    .sort()
+    .map((key) => `${key}:${headers[key]}\n`)
+    .join("");
   const canonicalRequest = [
-    "PUT",
+    method,
     canonicalUri,
     canonicalQuery,
     canonicalHeaders,
-    "content-type;host",
+    signedHeaders,
     "UNSIGNED-PAYLOAD"
   ].join("\n");
   const stringToSign = [
@@ -191,6 +196,19 @@ function signR2Upload({ objectPath, contentType, expiresSec = 900 }) {
   return `https://${hostName}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
+function signR2Upload({ objectPath, contentType, expiresSec = 900 }) {
+  return signR2Request({
+    method: "PUT",
+    objectPath,
+    signedHeaders: "content-type;host",
+    headers: {
+      "content-type": contentType,
+      host: `${r2AccountId}.r2.cloudflarestorage.com`
+    },
+    expiresSec
+  });
+}
+
 function uploadExtension(fileName, contentType) {
   const nameExtension = String(fileName || "").match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase();
   if (nameExtension) return nameExtension;
@@ -199,6 +217,73 @@ function uploadExtension(fileName, contentType) {
   if (contentType === "video/mp4") return ".mp4";
   if (contentType === "video/webm") return ".webm";
   return "";
+}
+
+function decodeXml(value) {
+  return String(value || "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function mediaTypeForPath(path) {
+  const extension = extname(path).toLowerCase();
+  if ([".mp4", ".webm"].includes(extension)) return "video";
+  if ([".mp3", ".m4a", ".wav", ".ogg"].includes(extension)) return "audio";
+  return "";
+}
+
+function titleFromPath(path) {
+  const fileName = path.split("/").pop() || "Saved media";
+  let decoded = fileName;
+  try {
+    decoded = decodeURIComponent(fileName);
+  } catch {
+    decoded = fileName;
+  }
+  return decoded.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+}
+
+async function listR2Media() {
+  const listUrl = signR2Request({
+    method: "GET",
+    queryParams: { "list-type": "2", "max-keys": "100" },
+    signedHeaders: "host",
+    headers: {
+      host: `${r2AccountId}.r2.cloudflarestorage.com`
+    }
+  });
+  const response = await fetch(listUrl);
+  const xml = await response.text();
+  if (!response.ok) {
+    const error = new Error("Could not load the R2 media library.");
+    error.status = response.status;
+    throw error;
+  }
+  const publicBase = r2PublicBaseUrl.replace(/\/$/, "");
+  return [...xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)]
+    .map((match) => {
+      const block = match[1];
+      const path = decodeXml(block.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] || "");
+      const mediaType = mediaTypeForPath(path);
+      if (!path || !mediaType) return null;
+      const sizeBytes = Number(block.match(/<Size>(\d+)<\/Size>/)?.[1] || 0);
+      return {
+        provider: "r2",
+        mediaType,
+        path,
+        url: `${publicBase}/${path.split("/").map(awsEncode).join("/")}`,
+        title: titleFromPath(path),
+        sourceLabel: mediaType === "video" ? "Saved video" : "Saved audio",
+        fileName: path.split("/").pop() || path,
+        sizeBytes,
+        mimeType: mediaType === "video" ? "video/mp4" : "audio/mpeg",
+        thumbnailUrl: ""
+      };
+    })
+    .filter(Boolean);
 }
 
 function encodeWebSocketFrame(text) {
@@ -520,6 +605,15 @@ async function routeApi(req, res, url) {
           }
         : null
     });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/storage/library") {
+    if (!storageConfigured()) return sendJson(res, 200, { media: [] });
+    try {
+      return sendJson(res, 200, { media: await listR2Media() });
+    } catch (error) {
+      return badRequest(res, error.message || "Could not load the media library.", error.status || 500);
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/storage/upload-url") {

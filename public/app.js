@@ -62,6 +62,8 @@ const els = {
   searchResults: $("#searchResults"),
   mediaForm: $("#mediaForm"),
   mediaInput: $("#mediaInput"),
+  libraryForm: $("#libraryForm"),
+  librarySelect: $("#librarySelect"),
   uploadForm: $("#uploadForm"),
   uploadInput: $("#uploadInput"),
   videoModeButton: $("#videoModeButton"),
@@ -82,6 +84,7 @@ const state = {
   invites: [],
   savedRooms: [],
   storageConfig: null,
+  mediaLibrary: [],
   events: null,
   player: null,
   playerReady: false,
@@ -441,6 +444,11 @@ async function loadStorageConfig() {
   state.storageConfig = data.configured ? data.storage : null;
 }
 
+async function loadMediaLibrary() {
+  const data = await api("/api/storage/library").catch(() => ({ media: [] }));
+  state.mediaLibrary = data.media || [];
+}
+
 function uploadExtension(file) {
   const nameExtension = file.name.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase();
   if (nameExtension) return nameExtension;
@@ -683,6 +691,31 @@ async function submitUpload(event) {
   }
 }
 
+async function submitLibraryMedia(event) {
+  event.preventDefault();
+  if (!isAuxHolder()) {
+    setMessage("Only the aux holder can play saved media.");
+    return;
+  }
+  const media = state.mediaLibrary.find((item) => item.path === els.librarySelect.value);
+  if (!media) {
+    setMessage("No saved media selected.");
+    return;
+  }
+  try {
+    setMessage("Loading saved media...");
+    const data = await command("media-change", { media });
+    if (data?.room) {
+      state.room = data.room;
+      render();
+      await applyPlayback(null, state.room.playback);
+    }
+    setMessage("");
+  } catch (error) {
+    setMessage(error.message);
+  }
+}
+
 async function searchYouTube(event) {
   event.preventDefault();
   const query = els.searchInput.value.trim();
@@ -845,8 +878,11 @@ function render() {
   els.searchForm.querySelector("button").disabled = !isAuxHolder() || state.searchLoading;
   els.mediaInput.disabled = !isAuxHolder();
   els.mediaForm.querySelector("button").disabled = !isAuxHolder();
-  els.uploadInput.disabled = !isAuxHolder() || !state.storageConfig;
-  els.uploadForm.querySelector("button").disabled = !isAuxHolder() || !state.storageConfig;
+  els.librarySelect.disabled = !isAuxHolder() || !state.mediaLibrary.length;
+  els.libraryForm.querySelector("button").disabled = !isAuxHolder() || !state.mediaLibrary.length;
+  els.uploadForm.classList.add("hidden");
+  els.uploadInput.disabled = true;
+  els.uploadForm.querySelector("button").disabled = true;
   els.searchInput.placeholder = isAuxHolder() ? "Search YouTube" : "Only the aux holder can search";
   els.mediaInput.placeholder = isAuxHolder()
     ? "Paste YouTube or YouTube Music link"
@@ -856,6 +892,22 @@ function render() {
   els.audioModeButton.classList.toggle("secondary", state.displayMode !== "audio");
   renderSearchResults();
   renderMessages(room.messages || []);
+
+  els.librarySelect.innerHTML = "";
+  if (!state.mediaLibrary.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = state.storageConfig ? "No saved media found" : "Connect R2 to load saved media";
+    els.librarySelect.append(option);
+  } else {
+    for (const item of state.mediaLibrary) {
+      const option = document.createElement("option");
+      option.value = item.path;
+      const size = item.sizeBytes ? ` · ${Math.max(1, Math.round(item.sizeBytes / 1024 / 1024))} MB` : "";
+      option.textContent = `${item.title}${size}`;
+      els.librarySelect.append(option);
+    }
+  }
 
   els.friendInviteSelect.innerHTML = "";
   const availableFriends = state.friends.filter(
@@ -1018,6 +1070,7 @@ async function restoreRoomFromUrl(params) {
 
 async function init() {
   await loadStorageConfig();
+  await loadMediaLibrary();
   await loadAccount();
   const params = new URLSearchParams(location.search);
   await restoreRoomFromUrl(params);
@@ -1107,6 +1160,7 @@ els.seekSlider.addEventListener("pointerup", commitSeek);
 els.seekSlider.addEventListener("touchend", commitSeek);
 els.searchForm.addEventListener("submit", searchYouTube);
 els.mediaForm.addEventListener("submit", submitMedia);
+els.libraryForm.addEventListener("submit", submitLibraryMedia);
 els.uploadForm.addEventListener("submit", submitUpload);
 els.hostedPlayer.addEventListener("loadedmetadata", renderPlaybackProgress);
 els.hostedPlayer.addEventListener("play", () => {

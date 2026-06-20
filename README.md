@@ -11,7 +11,7 @@ A rough technical proof for private synchronized YouTube listening/watch rooms.
 - Everyone can play/pause.
 - Only the current aux holder can load links, seek, and pass aux.
 - Shared YouTube and YouTube Music links.
-- Cloudflare R2 uploads for local audio/video files.
+- Cloudflare R2 saved-media picker for local audio/video files.
 - In-room YouTube search.
 - Embedded YouTube player sync.
 - Native uploaded-file player sync.
@@ -73,25 +73,25 @@ In-room search uses the official YouTube Data API. Create an API key in Google
 Cloud, enable YouTube Data API v3, and set `YOUTUBE_API_KEY` on the server. If
 the key is missing, paste-link loading still works.
 
-## Cloudflare R2 Uploads
+## Cloudflare R2 Saved Media
 
 Create a Cloudflare R2 bucket, for example `cozy-aux-media`, and enable public
 access through an `r2.dev` public URL or a custom domain. Create an R2 API token
-with object read/write access for that bucket, then set the R2 environment
+with object read/list access for that bucket, then set the R2 environment
 variables above on Render.
 
-The server creates a short-lived signed upload URL, the browser uploads directly
-to R2, and Cozy Aux saves the public file URL in the room. Supported formats are
-MP3, M4A, WAV, OGG, MP4, and WebM.
+For testing, upload media files to the R2 bucket from the Cloudflare dashboard.
+Cozy Aux lists existing playable files from the bucket and lets the aux holder
+pick one in the room. Supported formats are MP3, M4A, WAV, OGG, MP4, and WebM.
 
-Add CORS to the R2 bucket so the browser can upload from your app:
+Add CORS to the R2 bucket so browsers can play media from your app:
 
 ```json
 [
   {
     "AllowedOrigins": ["http://127.0.0.1:3000", "https://your-render-app.onrender.com"],
-    "AllowedMethods": ["GET", "PUT", "HEAD"],
-    "AllowedHeaders": ["content-type"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
     "ExposeHeaders": ["etag"],
     "MaxAgeSeconds": 3000
   }
