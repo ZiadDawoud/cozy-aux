@@ -100,13 +100,20 @@
               <div id="artwork" class="artwork"></div>
               <div class="track-copy">
                 <p id="mediaTitle" class="track-name">No link selected</p>
-                <p id="mediaMeta" class="muted">Paste a YouTube or YouTube Music link to start.</p>
+                <p id="mediaMeta" class="muted">Paste a YouTube, YouTube Music, or Google Drive link to start.</p>
               </div>
             </div>
 
             <div id="playerShell" class="player-shell">
               <div id="audioArtwork" class="audio-artwork"></div>
               <div id="playerMount"></div>
+              <iframe
+                id="drivePlayer"
+                class="drive-player hidden"
+                title="Google Drive preview"
+                allow="autoplay; fullscreen"
+                allowfullscreen
+              ></iframe>
               <button id="fullscreenButton" class="fullscreen-button" type="button" aria-label="Enter fullscreen">
                 Fullscreen
               </button>
@@ -138,7 +145,7 @@
               </form>
               <div id="searchResults" class="search-results"></div>
               <form id="mediaForm" class="link-form">
-                <input id="mediaInput" placeholder="Paste YouTube or YouTube Music link" />
+                <input id="mediaInput" placeholder="Paste YouTube or Google Drive link" />
                 <button type="submit">Load</button>
               </form>
               <div class="mode-toggle">

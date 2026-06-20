@@ -50,6 +50,7 @@ const els = {
   audioArtwork: $("#audioArtwork"),
   playerShell: $("#playerShell"),
   playerMount: $("#playerMount"),
+  drivePlayer: $("#drivePlayer"),
   fullscreenButton: $("#fullscreenButton"),
   seekSlider: $("#seekSlider"),
   elapsed: $("#elapsed"),
@@ -113,6 +114,14 @@ function isAuxHolder() {
   return state.room?.auxHolderId === state.participantId;
 }
 
+function isDriveMedia(media = state.room?.playback?.media) {
+  return media?.provider === "google-drive";
+}
+
+function isYouTubeMedia(media = state.room?.playback?.media) {
+  return !media || media.provider === "youtube";
+}
+
 function isPlayerFullscreen() {
   return document.fullscreenElement === els.playerShell;
 }
@@ -174,7 +183,36 @@ function extractYouTubeVideoId(value) {
   return "";
 }
 
+function extractGoogleDriveFileId(value) {
+  const input = value.trim();
+  try {
+    const url = new URL(input);
+    const host = url.hostname.replace(/^www\./, "");
+    if (host !== "drive.google.com" && host !== "docs.google.com") return "";
+    const filePathMatch = url.pathname.match(/\/file\/d\/([^/]+)/);
+    if (filePathMatch) return filePathMatch[1];
+    const openId = url.searchParams.get("id");
+    if (openId) return openId;
+    const foldersMatch = url.pathname.match(/\/uc$/) ? url.searchParams.get("id") : "";
+    return foldersMatch || "";
+  } catch {
+    return "";
+  }
+}
+
 function normalizeMedia(value) {
+  const driveFileId = extractGoogleDriveFileId(value);
+  if (driveFileId) {
+    return {
+      provider: "google-drive",
+      fileId: driveFileId,
+      url: `https://drive.google.com/file/d/${driveFileId}/preview`,
+      title: "Google Drive movie",
+      sourceLabel: "Google Drive",
+      thumbnailUrl: ""
+    };
+  }
+
   const videoId = extractYouTubeVideoId(value);
   if (!videoId) return null;
   return {
@@ -244,7 +282,13 @@ async function ensurePlayer() {
 }
 
 function handlePlayerStateChange(event) {
-  if (Date.now() < state.suppressPlayerEventsUntil || !state.room?.playback?.media) return;
+  if (
+    Date.now() < state.suppressPlayerEventsUntil ||
+    !state.room?.playback?.media ||
+    !isYouTubeMedia(state.room.playback.media)
+  ) {
+    return;
+  }
   const playerState = window.YT?.PlayerState;
   if (!playerState) return;
 
@@ -353,7 +397,9 @@ function openEvents() {
     const playbackChanged =
       canAffectPlayback &&
       (previousPlayback?.updatedAt !== nextRoom.playback?.updatedAt ||
+        previousPlayback?.media?.provider !== nextRoom.playback?.media?.provider ||
         previousPlayback?.media?.videoId !== nextRoom.playback?.media?.videoId ||
+        previousPlayback?.media?.fileId !== nextRoom.playback?.media?.fileId ||
         previousPlayback?.isPlaying !== nextRoom.playback?.isPlaying);
     state.room = nextRoom;
     render();
@@ -487,7 +533,24 @@ async function addFriend(event) {
 }
 
 async function applyPlayback(previous, playback) {
-  if (!state.playerReady || !playback?.media) return;
+  if (!playback?.media) return;
+
+  if (isDriveMedia(playback.media)) {
+    const mediaChanged =
+      previous?.media?.provider !== playback.media.provider ||
+      previous?.media?.fileId !== playback.media.fileId;
+    if (mediaChanged || state.appliedMediaId !== playback.media.fileId) {
+      state.appliedMediaId = playback.media.fileId;
+      els.drivePlayer.src = playback.media.url;
+    }
+    if (state.playerReady) {
+      state.suppressPlayerEventsUntil = Date.now() + 600;
+      state.player.pauseVideo();
+    }
+    return;
+  }
+
+  if (!state.playerReady) return;
   const player = await ensurePlayer();
   const nextPosition = currentPosition(playback);
   const mediaChanged = previous?.media?.videoId !== playback.media.videoId;
@@ -518,11 +581,11 @@ async function submitMedia(event) {
   }
   const media = normalizeMedia(els.mediaInput.value);
   if (!media) {
-    setMessage("Paste a valid YouTube or YouTube Music link.");
+    setMessage("Paste a valid YouTube, YouTube Music, or Google Drive link.");
     return;
   }
   setMessage("Loading link...");
-  await command("media-change", { media: await enrichMedia(media) });
+  await command("media-change", { media: media.provider === "youtube" ? await enrichMedia(media) : media });
   setMessage("");
 }
 
@@ -655,27 +718,41 @@ function render() {
 
   const playback = room.playback;
   const media = playback.media;
+  const driveMedia = isDriveMedia(media);
   els.mediaTitle.textContent = media ? media.title : "No link selected";
   els.mediaMeta.textContent = media
-    ? [media.sourceLabel, media.authorName, media.videoId].filter(Boolean).join(" · ")
-    : "Paste a YouTube or YouTube Music link to start.";
+    ? [media.sourceLabel, media.authorName, media.videoId || media.fileId].filter(Boolean).join(" · ")
+    : "Paste a YouTube, YouTube Music, or Google Drive link to start.";
   els.artwork.style.backgroundImage = media?.thumbnailUrl ? `url("${media.thumbnailUrl}")` : "";
   els.audioArtwork.style.backgroundImage = media?.thumbnailUrl
     ? `url("${media.thumbnailUrl}")`
     : "";
+  els.playerMount.classList.toggle("hidden", driveMedia);
+  els.drivePlayer.classList.toggle("hidden", !driveMedia);
+  if (driveMedia && els.drivePlayer.src !== media.url) {
+    els.drivePlayer.src = media.url;
+  }
 
   const position = currentPosition(playback);
   const playerDuration = state.playerReady ? state.player.getDuration?.() || 0 : 0;
   const actual = state.playerReady && media ? state.player.getCurrentTime?.() || 0 : 0;
   const drift = media ? Math.abs(actual - position) : 0;
-  els.syncStatus.textContent = media ? (drift > 2.5 ? "Catching up" : "In sync") : "No media";
+  els.syncStatus.textContent = driveMedia
+    ? "Drive preview"
+    : media
+      ? drift > 2.5
+        ? "Catching up"
+        : "In sync"
+      : "No media";
   els.seekSlider.max = String(playerDuration || 100);
-  if (!state.isSeeking) {
+  if (!state.isSeeking && !driveMedia) {
     els.seekSlider.value = String(Math.min(position, playerDuration || 100));
   }
-  els.elapsed.textContent = formatSec(position);
-  els.duration.textContent = playerDuration ? formatSec(playerDuration) : "--:--";
-  els.seekSlider.disabled = !isAuxHolder() || !media;
+  els.elapsed.textContent = driveMedia ? "--:--" : formatSec(position);
+  els.duration.textContent = driveMedia ? "--:--" : playerDuration ? formatSec(playerDuration) : "--:--";
+  els.seekSlider.disabled = driveMedia || !isAuxHolder() || !media;
+  els.playButton.disabled = driveMedia || !media;
+  els.pauseButton.disabled = driveMedia || !media;
   renderFullscreenButton();
   els.searchInput.disabled = !isAuxHolder();
   els.searchForm.querySelector("button").disabled = !isAuxHolder() || state.searchLoading;
@@ -683,7 +760,7 @@ function render() {
   els.mediaForm.querySelector("button").disabled = !isAuxHolder();
   els.searchInput.placeholder = isAuxHolder() ? "Search YouTube" : "Only the aux holder can search";
   els.mediaInput.placeholder = isAuxHolder()
-    ? "Paste YouTube or YouTube Music link"
+    ? "Paste YouTube, YouTube Music, or Google Drive link"
     : "Only the aux holder can load links";
   document.body.classList.toggle("audio-focus", state.displayMode === "audio");
   els.videoModeButton.classList.toggle("secondary", state.displayMode !== "video");
@@ -786,6 +863,12 @@ function renderPlaybackProgress() {
   if (!state.room) return;
   const playback = state.room.playback;
   const media = playback.media;
+  if (isDriveMedia(media)) {
+    els.syncStatus.textContent = media ? "Drive preview" : "No media";
+    els.elapsed.textContent = "--:--";
+    els.duration.textContent = "--:--";
+    return;
+  }
   const position = currentPosition(playback);
   const playerDuration = state.playerReady ? state.player.getDuration?.() || 0 : 0;
   const actual = state.playerReady && media ? state.player.getCurrentTime?.() || 0 : 0;
@@ -804,7 +887,7 @@ function tick() {
   if (state.room) {
     renderPlaybackProgress();
     const playback = state.room.playback;
-    if (!state.isSeeking && state.playerReady && playback?.media && playback.isPlaying) {
+    if (!state.isSeeking && state.playerReady && playback?.media && playback.isPlaying && !isDriveMedia(playback.media)) {
       const desired = currentPosition(playback);
       const actual = state.player.getCurrentTime?.() || 0;
       if (Math.abs(actual - desired) > 2.5) {
