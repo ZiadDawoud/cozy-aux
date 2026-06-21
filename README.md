@@ -81,6 +81,9 @@ access through an `r2.dev` public URL or a custom domain. Create an R2 API token
 with object read/list access for that bucket, then set the R2 environment
 variables above on Render.
 
+Cozy Aux talks to R2 through the official AWS S3 SDK using R2's S3-compatible
+API. The SDK handles bucket listing and presigned upload URLs.
+
 For testing, upload media files to the R2 bucket from the Cloudflare dashboard.
 Cozy Aux lists existing playable files from the bucket and lets the aux holder
 pick one in the room. Supported formats are MP3, M4A, WAV, OGG, MP4, and WebM.

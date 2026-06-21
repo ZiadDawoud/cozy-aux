@@ -1,8 +1,10 @@
 import http from "node:http";
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { db, loadDb, saveDb } from "./db.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -145,6 +147,18 @@ function r2HostName() {
   return `${r2AccountId}.r2.cloudflarestorage.com`;
 }
 
+function r2Client() {
+  return new S3Client({
+    region: "auto",
+    endpoint: `https://${r2HostName()}`,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: r2AccessKeyId,
+      secretAccessKey: r2SecretAccessKey
+    }
+  });
+}
+
 function storageDebug() {
   let publicBaseHost = "";
   try {
@@ -171,67 +185,16 @@ function awsEncode(value) {
   );
 }
 
-function hmac(key, value, encoding) {
-  return createHmac("sha256", key).update(value).digest(encoding);
-}
-
-function signR2Request({ method, objectPath = "", queryParams = {}, signedHeaders, headers, expiresSec = 900 }) {
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const dateStamp = amzDate.slice(0, 8);
-  const scope = `${dateStamp}/auto/s3/aws4_request`;
-  const hostName = r2HostName();
-  const path = objectPath ? `/${objectPath.split("/").map(awsEncode).join("/")}` : "";
-  const canonicalUri = `/${awsEncode(r2Bucket)}${path}`;
-  const query = {
-    ...queryParams,
-    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
-    "X-Amz-Credential": `${r2AccessKeyId}/${scope}`,
-    "X-Amz-Date": amzDate,
-    "X-Amz-Expires": String(expiresSec),
-    "X-Amz-SignedHeaders": signedHeaders
-  };
-  const canonicalQuery = Object.keys(query)
-    .sort()
-    .map((key) => `${awsEncode(key)}=${awsEncode(query[key])}`)
-    .join("&");
-  const canonicalHeaders = Object.keys(headers)
-    .sort()
-    .map((key) => `${key}:${headers[key]}\n`)
-    .join("");
-  const canonicalRequest = [
-    method,
-    canonicalUri,
-    canonicalQuery,
-    canonicalHeaders,
-    signedHeaders,
-    "UNSIGNED-PAYLOAD"
-  ].join("\n");
-  const stringToSign = [
-    "AWS4-HMAC-SHA256",
-    amzDate,
-    scope,
-    createHash("sha256").update(canonicalRequest).digest("hex")
-  ].join("\n");
-  const dateKey = hmac(`AWS4${r2SecretAccessKey}`, dateStamp);
-  const regionKey = hmac(dateKey, "auto");
-  const serviceKey = hmac(regionKey, "s3");
-  const signingKey = hmac(serviceKey, "aws4_request");
-  const signature = hmac(signingKey, stringToSign, "hex");
-  return `https://${hostName}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
-}
-
-function signR2Upload({ objectPath, contentType, expiresSec = 900 }) {
-  return signR2Request({
-    method: "PUT",
-    objectPath,
-    signedHeaders: "content-type;host",
-    headers: {
-      "content-type": contentType,
-      host: r2HostName()
-    },
-    expiresSec
-  });
+async function signR2Upload({ objectPath, contentType, expiresSec = 900 }) {
+  return getSignedUrl(
+    r2Client(),
+    new PutObjectCommand({
+      Bucket: r2Bucket,
+      Key: objectPath,
+      ContentType: contentType
+    }),
+    { expiresIn: expiresSec }
+  );
 }
 
 function uploadExtension(fileName, contentType) {
@@ -242,15 +205,6 @@ function uploadExtension(fileName, contentType) {
   if (contentType === "video/mp4") return ".mp4";
   if (contentType === "video/webm") return ".webm";
   return "";
-}
-
-function decodeXml(value) {
-  return String(value || "")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
 }
 
 function mediaTypeForPath(path) {
@@ -322,54 +276,40 @@ function configuredMediaLibrary() {
 }
 
 async function listR2Media() {
-  const listUrl = signR2Request({
-    method: "GET",
-    queryParams: { "list-type": "2", "max-keys": "100" },
-    signedHeaders: "host",
-    headers: {
-      host: r2HostName()
-    }
-  });
-  let response;
   try {
-    response = await fetch(listUrl);
+    const data = await r2Client().send(
+      new ListObjectsV2Command({
+        Bucket: r2Bucket,
+        MaxKeys: 100
+      })
+    );
+    const publicBase = r2PublicBaseUrl;
+    return (data.Contents || [])
+      .map((object) => {
+        const path = object.Key || "";
+        const mediaType = mediaTypeForPath(path);
+        if (!path || !mediaType) return null;
+        return {
+          provider: "r2",
+          mediaType,
+          path,
+          url: `${publicBase}/${path.split("/").map(awsEncode).join("/")}`,
+          title: titleFromPath(path),
+          sourceLabel: mediaType === "video" ? "Saved video" : "Saved audio",
+          fileName: path.split("/").pop() || path,
+          sizeBytes: Number(object.Size || 0),
+          mimeType: mediaType === "video" ? "video/mp4" : "audio/mpeg",
+          thumbnailUrl: ""
+        };
+      })
+      .filter(Boolean);
   } catch (error) {
-    const detail = error.cause?.message || error.message || "network error";
-    const next = new Error(`Could not reach Cloudflare R2 at ${r2HostName()}. Check R2_ACCOUNT_ID. Detail: ${detail}.`);
-    next.status = 502;
+    const status = error.$metadata?.httpStatusCode || 502;
+    const detail = error.Code || error.name || error.cause?.message || error.message || "network error";
+    const next = new Error(`Could not load the R2 media library from ${r2HostName()}. ${detail}.`);
+    next.status = status;
     throw next;
   }
-  const xml = await response.text();
-  if (!response.ok) {
-    const details = xml.match(/<Message>([\s\S]*?)<\/Message>/)?.[1] || xml.match(/<Code>([\s\S]*?)<\/Code>/)?.[1] || "";
-    const error = new Error(
-      `Could not load the R2 media library. R2 returned ${response.status}${details ? `: ${decodeXml(details)}` : ""}.`
-    );
-    error.status = response.status;
-    throw error;
-  }
-  const publicBase = r2PublicBaseUrl;
-  return [...xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)]
-    .map((match) => {
-      const block = match[1];
-      const path = decodeXml(block.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] || "");
-      const mediaType = mediaTypeForPath(path);
-      if (!path || !mediaType) return null;
-      const sizeBytes = Number(block.match(/<Size>(\d+)<\/Size>/)?.[1] || 0);
-      return {
-        provider: "r2",
-        mediaType,
-        path,
-        url: `${publicBase}/${path.split("/").map(awsEncode).join("/")}`,
-        title: titleFromPath(path),
-        sourceLabel: mediaType === "video" ? "Saved video" : "Saved audio",
-        fileName: path.split("/").pop() || path,
-        sizeBytes,
-        mimeType: mediaType === "video" ? "video/mp4" : "audio/mpeg",
-        thumbnailUrl: ""
-      };
-    })
-    .filter(Boolean);
 }
 
 function encodeWebSocketFrame(text) {
@@ -737,7 +677,7 @@ async function routeApi(req, res, url) {
     return sendJson(res, 200, {
       upload: {
         method: "PUT",
-        url: signR2Upload({ objectPath, contentType }),
+        url: await signR2Upload({ objectPath, contentType }),
         headers: { "content-type": contentType },
         objectPath,
         publicUrl: `${publicBase}/${objectPath}`
