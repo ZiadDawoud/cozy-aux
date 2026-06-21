@@ -50,6 +50,7 @@ Recommended starter deploy:
   - `R2_SECRET_ACCESS_KEY=<your R2 secret access key>`
   - `R2_BUCKET=cozy-aux-media`
   - `R2_PUBLIC_BASE_URL=<your public bucket URL or custom domain>`
+  - `MEDIA_LIBRARY=<optional JSON or comma-separated public media URLs>`
   - `MAX_UPLOAD_BYTES=3221225472`
 - Optional environment variable for in-room search: `YOUTUBE_API_KEY=<your YouTube Data API key>`
 - Optional environment variable for localized search: `YOUTUBE_REGION_CODE=US`
@@ -83,6 +84,23 @@ variables above on Render.
 For testing, upload media files to the R2 bucket from the Cloudflare dashboard.
 Cozy Aux lists existing playable files from the bucket and lets the aux holder
 pick one in the room. Supported formats are MP3, M4A, WAV, OGG, MP4, and WebM.
+
+If bucket listing is not available, set `MEDIA_LIBRARY` on Render instead. The
+simplest format is one public file URL per line:
+
+```text
+https://pub-example.r2.dev/movie.mp4
+https://pub-example.r2.dev/song.mp3
+```
+
+For nicer titles, use JSON:
+
+```json
+[
+  { "title": "Movie Night Test", "url": "https://pub-example.r2.dev/movie.mp4", "mediaType": "video" },
+  { "title": "Study Mix", "url": "https://pub-example.r2.dev/song.mp3", "mediaType": "audio" }
+]
+```
 
 Add CORS to the R2 bucket so browsers can play media from your app:
 

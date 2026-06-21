@@ -17,6 +17,7 @@ const r2AccessKeyId = (process.env.R2_ACCESS_KEY_ID || "").trim();
 const r2SecretAccessKey = (process.env.R2_SECRET_ACCESS_KEY || "").trim();
 const r2Bucket = (process.env.R2_BUCKET || "cozy-aux-media").trim();
 const r2PublicBaseUrl = (process.env.R2_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
+const mediaLibraryConfig = (process.env.MEDIA_LIBRARY || "").trim();
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 3 * 1024 * 1024 * 1024);
 
 const rooms = new Map();
@@ -268,6 +269,56 @@ function titleFromPath(path) {
     decoded = fileName;
   }
   return decoded.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+}
+
+function safelyDecodePath(path) {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+function mediaFromPublicUrl(value, index = 0) {
+  const raw = typeof value === "string" ? { url: value } : value || {};
+  const url = String(raw.url || "").trim();
+  if (!url) return null;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const path = safelyDecodePath(parsed.pathname.replace(/^\/+/, ""));
+  const mediaType = raw.mediaType || mediaTypeForPath(path);
+  if (!mediaType) return null;
+  return {
+    provider: "r2",
+    mediaType,
+    path: raw.path || path || `saved-media-${index}`,
+    url,
+    title: raw.title || titleFromPath(path || url),
+    sourceLabel: mediaType === "video" ? "Saved video" : "Saved audio",
+    fileName: raw.fileName || path.split("/").pop() || `saved-media-${index + 1}`,
+    sizeBytes: Number(raw.sizeBytes || 0),
+    mimeType: raw.mimeType || (mediaType === "video" ? "video/mp4" : "audio/mpeg"),
+    thumbnailUrl: raw.thumbnailUrl || ""
+  };
+}
+
+function configuredMediaLibrary() {
+  if (!mediaLibraryConfig) return [];
+  let items = [];
+  try {
+    const parsed = JSON.parse(mediaLibraryConfig);
+    items = Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    items = mediaLibraryConfig
+      .split(/\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return items.map(mediaFromPublicUrl).filter(Boolean);
 }
 
 async function listR2Media() {
@@ -647,6 +698,8 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/storage/library") {
+    const configuredLibrary = configuredMediaLibrary();
+    if (configuredLibrary.length) return sendJson(res, 200, { media: configuredLibrary });
     if (!storageConfigured()) return sendJson(res, 200, { media: [] });
     try {
       return sendJson(res, 200, { media: await listR2Media() });
