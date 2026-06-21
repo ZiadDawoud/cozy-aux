@@ -269,6 +269,43 @@ h2 {
   gap: 10px;
 }
 
+.upload-status {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #314544;
+  border-radius: 8px;
+  background: #121717;
+}
+
+.upload-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.upload-status-head span {
+  color: #f2c86b;
+  font-weight: 800;
+}
+
+.upload-meter {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #24302f;
+}
+
+.upload-meter span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: #f2c86b;
+  transition: width 160ms ease;
+}
+
 .search-result {
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr);

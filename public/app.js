@@ -66,6 +66,11 @@ const els = {
   librarySelect: $("#librarySelect"),
   uploadForm: $("#uploadForm"),
   uploadInput: $("#uploadInput"),
+  uploadStatus: $("#uploadStatus"),
+  uploadStatusLabel: $("#uploadStatusLabel"),
+  uploadPercent: $("#uploadPercent"),
+  uploadMeterFill: $("#uploadMeterFill"),
+  uploadDetails: $("#uploadDetails"),
   videoModeButton: $("#videoModeButton"),
   audioModeButton: $("#audioModeButton"),
   chatCount: $("#chatCount"),
@@ -97,6 +102,14 @@ const state = {
   lastRenderedMessageId: "",
   searchResults: [],
   searchLoading: false,
+  upload: {
+    active: false,
+    loaded: 0,
+    total: 0,
+    startedAt: 0,
+    speedBytesPerSec: 0,
+    status: ""
+  },
   pendingRoomCode: ""
 };
 
@@ -109,6 +122,29 @@ function formatSec(seconds = 0) {
   const minutes = Math.floor(totalSeconds / 60);
   const secs = String(totalSeconds % 60).padStart(2, "0");
   return `${minutes}:${secs}`;
+}
+
+function formatLongDuration(seconds = 0) {
+  const totalSeconds = Math.max(0, Math.ceil(seconds));
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return "calculating";
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+function formatBytes(bytes = 0) {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = Math.max(0, Number(bytes) || 0);
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const precision = value >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
 }
 
 function currentPosition(playback) {
@@ -470,6 +506,52 @@ function hostedMediaType(file) {
   return file.type.startsWith("video/") ? "video" : "audio";
 }
 
+function updateUploadProgress(patch = {}) {
+  state.upload = { ...state.upload, ...patch };
+  renderUploadStatus();
+}
+
+function uploadFileWithProgress(ticket, file) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(ticket.upload.method, ticket.upload.url);
+    for (const [key, value] of Object.entries(ticket.upload.headers || {})) {
+      xhr.setRequestHeader(key, value);
+    }
+    xhr.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) {
+        updateUploadProgress({ active: true, status: "Uploading", loaded: 0, total: file.size });
+        return;
+      }
+      const elapsedSec = Math.max(0.1, (Date.now() - state.upload.startedAt) / 1000);
+      updateUploadProgress({
+        active: true,
+        status: "Uploading",
+        loaded: event.loaded,
+        total: event.total,
+        speedBytesPerSec: event.loaded / elapsedSec
+      });
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        updateUploadProgress({
+          active: true,
+          status: "Processing",
+          loaded: file.size,
+          total: file.size,
+          speedBytesPerSec: state.upload.speedBytesPerSec
+        });
+        resolve();
+        return;
+      }
+      reject(new Error("Cloudflare R2 upload failed. Check bucket CORS and public access."));
+    });
+    xhr.addEventListener("error", () => reject(new Error("Upload failed before it reached R2.")));
+    xhr.addEventListener("abort", () => reject(new Error("Upload was cancelled.")));
+    xhr.send(file);
+  });
+}
+
 async function uploadToR2(file) {
   const config = state.storageConfig;
   if (!config) throw new Error("Add Cloudflare R2 environment variables before uploading.");
@@ -491,14 +573,7 @@ async function uploadToR2(file) {
       sizeBytes: file.size
     })
   });
-  const response = await fetch(ticket.upload.url, {
-    method: ticket.upload.method,
-    headers: ticket.upload.headers,
-    body: file
-  });
-  if (!response.ok) {
-    throw new Error("Cloudflare R2 upload failed. Check bucket CORS and public access.");
-  }
+  await uploadFileWithProgress(ticket, file);
 
   return {
     provider: "r2",
@@ -683,17 +758,43 @@ async function submitUpload(event) {
     return;
   }
   try {
+    updateUploadProgress({
+      active: true,
+      loaded: 0,
+      total: file.size,
+      startedAt: Date.now(),
+      speedBytesPerSec: 0,
+      status: "Preparing upload"
+    });
     setMessage("Uploading to Cloudflare R2...");
+    render();
     const media = await uploadToR2(file);
+    updateUploadProgress({
+      active: true,
+      loaded: file.size,
+      total: file.size,
+      status: "Starting playback"
+    });
     const data = await command("media-change", { media });
     if (data?.room) {
       state.room = data.room;
       els.uploadInput.value = "";
+      state.mediaLibrary = [media, ...state.mediaLibrary.filter((item) => item.path !== media.path)];
+      updateUploadProgress({
+        active: false,
+        loaded: file.size,
+        total: file.size,
+        status: "Upload complete"
+      });
       render();
       await applyPlayback(null, state.room.playback);
     }
     setMessage("");
   } catch (error) {
+    updateUploadProgress({
+      active: false,
+      status: "Upload failed"
+    });
     setMessage(error.message);
   }
 }
@@ -836,6 +937,32 @@ function addLocalSystemMessage(text) {
   };
 }
 
+function renderUploadStatus() {
+  const upload = state.upload;
+  const show = upload.active || upload.status;
+  els.uploadStatus.classList.toggle("hidden", !show);
+  if (!show) return;
+
+  const total = upload.total || 0;
+  const loaded = Math.min(upload.loaded || 0, total || upload.loaded || 0);
+  const percent = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  const remainingBytes = Math.max(0, total - loaded);
+  const eta =
+    remainingBytes <= 0
+      ? "now"
+      : upload.speedBytesPerSec > 0
+        ? formatLongDuration(remainingBytes / upload.speedBytesPerSec)
+        : "calculating";
+  const speed = upload.speedBytesPerSec ? `${formatBytes(upload.speedBytesPerSec)}/s` : "measuring speed";
+
+  els.uploadStatusLabel.textContent = upload.status || "Uploading";
+  els.uploadPercent.textContent = total ? `${percent}%` : "--";
+  els.uploadMeterFill.style.width = total ? `${percent}%` : "0%";
+  els.uploadDetails.textContent = total
+    ? `${formatBytes(loaded)} of ${formatBytes(total)} · ${speed} · ready in ${eta}`
+    : speed;
+}
+
 function render() {
   const room = state.room;
   if (!room) {
@@ -887,9 +1014,10 @@ function render() {
   els.mediaForm.querySelector("button").disabled = !isAuxHolder();
   els.librarySelect.disabled = !isAuxHolder() || !state.mediaLibrary.length;
   els.libraryForm.querySelector("button").disabled = !isAuxHolder() || !state.mediaLibrary.length;
-  els.uploadForm.classList.add("hidden");
-  els.uploadInput.disabled = true;
-  els.uploadForm.querySelector("button").disabled = true;
+  els.uploadForm.classList.toggle("hidden", !state.storageConfig);
+  els.uploadInput.disabled = !isAuxHolder() || !state.storageConfig || state.upload.active;
+  els.uploadForm.querySelector("button").disabled = !isAuxHolder() || !state.storageConfig || state.upload.active;
+  renderUploadStatus();
   els.searchInput.placeholder = isAuxHolder() ? "Search YouTube" : "Only the aux holder can search";
   els.mediaInput.placeholder = isAuxHolder()
     ? "Paste YouTube or YouTube Music link"

@@ -11,7 +11,7 @@ A rough technical proof for private synchronized YouTube listening/watch rooms.
 - Everyone can play/pause.
 - Only the current aux holder can load links, seek, and pass aux.
 - Shared YouTube and YouTube Music links.
-- Cloudflare R2 saved-media picker for local audio/video files.
+- Cloudflare R2 uploads with progress and saved-media picker for local audio/video files.
 - In-room YouTube search.
 - Embedded YouTube player sync.
 - Native uploaded-file player sync.
@@ -105,14 +105,14 @@ For nicer titles, use JSON:
 ]
 ```
 
-Add CORS to the R2 bucket so browsers can play media from your app:
+Add CORS to the R2 bucket so browsers can upload and play media from your app:
 
 ```json
 [
   {
     "AllowedOrigins": ["http://127.0.0.1:3000", "https://your-render-app.onrender.com"],
-    "AllowedMethods": ["GET", "HEAD"],
-    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["content-type"],
     "ExposeHeaders": ["etag"],
     "MaxAgeSeconds": 3000
   }

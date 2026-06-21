@@ -152,6 +152,16 @@
                 <input id="uploadInput" type="file" accept="audio/*,video/mp4,video/webm" />
                 <button type="submit">Upload</button>
               </form>
+              <div id="uploadStatus" class="upload-status hidden">
+                <div class="upload-status-head">
+                  <strong id="uploadStatusLabel">Preparing upload</strong>
+                  <span id="uploadPercent">0%</span>
+                </div>
+                <div class="upload-meter" aria-hidden="true">
+                  <span id="uploadMeterFill"></span>
+                </div>
+                <div id="uploadDetails" class="muted small">Waiting for file</div>
+              </div>
               <div class="mode-toggle">
                 <button id="videoModeButton" type="button">Video</button>
                 <button id="audioModeButton" class="secondary" type="button">Audio focus</button>
