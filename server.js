@@ -12,11 +12,11 @@ const host = process.env.HOST || "127.0.0.1";
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${port}`;
 const youtubeApiKey = process.env.YOUTUBE_API_KEY || "";
 const youtubeRegionCode = process.env.YOUTUBE_REGION_CODE || "US";
-const r2AccountId = process.env.R2_ACCOUNT_ID || "";
-const r2AccessKeyId = process.env.R2_ACCESS_KEY_ID || "";
-const r2SecretAccessKey = process.env.R2_SECRET_ACCESS_KEY || "";
-const r2Bucket = process.env.R2_BUCKET || "cozy-aux-media";
-const r2PublicBaseUrl = process.env.R2_PUBLIC_BASE_URL || "";
+const r2AccountId = (process.env.R2_ACCOUNT_ID || "").trim();
+const r2AccessKeyId = (process.env.R2_ACCESS_KEY_ID || "").trim();
+const r2SecretAccessKey = (process.env.R2_SECRET_ACCESS_KEY || "").trim();
+const r2Bucket = (process.env.R2_BUCKET || "cozy-aux-media").trim();
+const r2PublicBaseUrl = (process.env.R2_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 3 * 1024 * 1024 * 1024);
 
 const rooms = new Map();
@@ -140,6 +140,30 @@ function storageConfigured() {
   return Boolean(r2AccountId && r2AccessKeyId && r2SecretAccessKey && r2Bucket && r2PublicBaseUrl);
 }
 
+function r2HostName() {
+  return `${r2AccountId}.r2.cloudflarestorage.com`;
+}
+
+function storageDebug() {
+  let publicBaseHost = "";
+  try {
+    publicBaseHost = r2PublicBaseUrl ? new URL(r2PublicBaseUrl).host : "";
+  } catch {
+    publicBaseHost = "invalid-url";
+  }
+  return {
+    configured: storageConfigured(),
+    accountIdSet: Boolean(r2AccountId),
+    accountIdLooksValid: /^[a-f0-9]{32}$/i.test(r2AccountId),
+    accessKeyIdSet: Boolean(r2AccessKeyId),
+    secretAccessKeySet: Boolean(r2SecretAccessKey),
+    bucket: r2Bucket || null,
+    publicBaseUrlSet: Boolean(r2PublicBaseUrl),
+    publicBaseHost,
+    r2ApiHost: r2AccountId ? r2HostName() : null
+  };
+}
+
 function awsEncode(value) {
   return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
     `%${char.charCodeAt(0).toString(16).toUpperCase()}`
@@ -155,7 +179,7 @@ function signR2Request({ method, objectPath = "", queryParams = {}, signedHeader
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
   const dateStamp = amzDate.slice(0, 8);
   const scope = `${dateStamp}/auto/s3/aws4_request`;
-  const hostName = `${r2AccountId}.r2.cloudflarestorage.com`;
+  const hostName = r2HostName();
   const path = objectPath ? `/${objectPath.split("/").map(awsEncode).join("/")}` : "";
   const canonicalUri = `/${awsEncode(r2Bucket)}${path}`;
   const query = {
@@ -203,7 +227,7 @@ function signR2Upload({ objectPath, contentType, expiresSec = 900 }) {
     signedHeaders: "content-type;host",
     headers: {
       "content-type": contentType,
-      host: `${r2AccountId}.r2.cloudflarestorage.com`
+      host: r2HostName()
     },
     expiresSec
   });
@@ -252,10 +276,18 @@ async function listR2Media() {
     queryParams: { "list-type": "2", "max-keys": "100" },
     signedHeaders: "host",
     headers: {
-      host: `${r2AccountId}.r2.cloudflarestorage.com`
+      host: r2HostName()
     }
   });
-  const response = await fetch(listUrl);
+  let response;
+  try {
+    response = await fetch(listUrl);
+  } catch (error) {
+    const detail = error.cause?.message || error.message || "network error";
+    const next = new Error(`Could not reach Cloudflare R2 at ${r2HostName()}. Check R2_ACCOUNT_ID. Detail: ${detail}.`);
+    next.status = 502;
+    throw next;
+  }
   const xml = await response.text();
   if (!response.ok) {
     const details = xml.match(/<Message>([\s\S]*?)<\/Message>/)?.[1] || xml.match(/<Code>([\s\S]*?)<\/Code>/)?.[1] || "";
@@ -265,7 +297,7 @@ async function listR2Media() {
     error.status = response.status;
     throw error;
   }
-  const publicBase = r2PublicBaseUrl.replace(/\/$/, "");
+  const publicBase = r2PublicBaseUrl;
   return [...xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)]
     .map((match) => {
       const block = match[1];
@@ -610,6 +642,10 @@ async function routeApi(req, res, url) {
     });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/storage/debug") {
+    return sendJson(res, 200, storageDebug());
+  }
+
   if (req.method === "GET" && url.pathname === "/api/storage/library") {
     if (!storageConfigured()) return sendJson(res, 200, { media: [] });
     try {
@@ -644,7 +680,7 @@ async function routeApi(req, res, url) {
     }
 
     const objectPath = `${room.code}/${randomUUID()}${extension}`;
-    const publicBase = r2PublicBaseUrl.replace(/\/$/, "");
+    const publicBase = r2PublicBaseUrl;
     return sendJson(res, 200, {
       upload: {
         method: "PUT",
