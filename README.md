@@ -44,8 +44,9 @@ Recommended starter deploy:
 - Build command: `npm install`
 - Start command: `npm start`
 - Environment variable: `HOST=0.0.0.0`
+- Shared Cloudflare environment variable:
+  - `CLOUDFLARE_ACCOUNT_ID=<your Cloudflare account ID>`
 - Optional environment variables for Cloudflare R2 uploads:
-  - `R2_ACCOUNT_ID=<your Cloudflare account ID>`
   - `R2_ACCESS_KEY_ID=<your R2 access key ID>`
   - `R2_SECRET_ACCESS_KEY=<your R2 secret access key>`
   - `R2_BUCKET=cozy-aux-media`
@@ -55,7 +56,6 @@ Recommended starter deploy:
 - Optional environment variable for in-room search: `YOUTUBE_API_KEY=<your YouTube Data API key>`
 - Optional environment variable for localized search: `YOUTUBE_REGION_CODE=US`
 - Optional environment variables for Cloudflare D1 account storage:
-  - `CLOUDFLARE_ACCOUNT_ID=<your Cloudflare account ID>`
   - `CLOUDFLARE_D1_DATABASE_ID=<your D1 database ID>`
   - `CLOUDFLARE_D1_API_TOKEN=<API token with D1 edit/query access>`
 
@@ -64,6 +64,9 @@ friends, sessions, and room invites use Cloudflare D1 when the D1 environment
 variables are set; otherwise they fall back to the JSON file for local testing.
 Render's filesystem can be reset by redeploys or instance replacement, so use D1
 before testing accounts with friends.
+
+`R2_ACCOUNT_ID` can still be set as an override, but if it is missing Cozy Aux
+uses `CLOUDFLARE_ACCOUNT_ID` for R2 too.
 
 Static hosts like GitHub Pages, Tiiny Host, and S3 will serve the HTML/CSS/JS, but
 the room API and WebSocket routes will not work.
