@@ -1030,7 +1030,7 @@ function render() {
     : "";
   els.hostedPlayer.classList.toggle("hidden", !hostedMedia);
   els.playerMount.classList.toggle("hidden", hostedMedia);
-  els.hostedPlayer.controls = false;
+  els.hostedPlayer.controls = hostedMedia;
   if (hostedMedia && els.hostedPlayer.src !== media.url) {
     els.hostedPlayer.src = media.url;
   }
@@ -1343,6 +1343,10 @@ els.hostedPlayer.addEventListener("play", () => {
 els.hostedPlayer.addEventListener("pause", () => {
   if (Date.now() < state.suppressPlayerEventsUntil || !isHostedMedia()) return;
   command("pause", { positionSec: activeCurrentTime() });
+});
+els.hostedPlayer.addEventListener("seeked", () => {
+  if (Date.now() < state.suppressPlayerEventsUntil || !isHostedMedia() || !isAuxHolder()) return;
+  command("seek", { positionSec: activeCurrentTime() });
 });
 els.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
