@@ -4,3 +4,9 @@ node_modules/
 .env.*
 npm-debug.log*
 data/*.json
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
