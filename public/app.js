@@ -586,7 +586,7 @@ async function uploadToR2(file) {
     mediaType: hostedMediaType(file),
     path: ticket.upload.objectPath,
     url: ticket.upload.publicUrl,
-    title: file.name.replace(/\.[^.]+$/, "") || "Uploaded media",
+    title: ticket.upload.title || file.name.replace(/\.[^.]+$/, "") || "Uploaded media",
     sourceLabel: hostedMediaType(file) === "video" ? "Uploaded video" : "Uploaded audio",
     fileName: file.name,
     sizeBytes: file.size,

@@ -104,9 +104,10 @@ variables above on Render.
 Cozy Aux talks to R2 through the official AWS S3 SDK using R2's S3-compatible
 API. The SDK handles bucket listing and presigned upload URLs.
 
-For testing, upload media files to the R2 bucket from the Cloudflare dashboard.
-Cozy Aux lists existing playable files from the bucket and lets the aux holder
-pick one in the room. Supported formats are MP3, M4A, WAV, OGG, MP4, and WebM.
+Cozy Aux uploads media into a shared `Library/` folder in R2, using clean file
+names plus a short random suffix to avoid overwrites. Those files are shared
+across all rooms and appear in the saved media picker with readable titles.
+Supported formats are MP3, M4A, WAV, OGG, MP4, and WebM.
 
 If bucket listing is not available, set `MEDIA_LIBRARY` on Render instead. The
 simplest format is one public file URL per line:

@@ -164,7 +164,28 @@ function titleFromPath(path) {
   } catch {
     decoded = fileName;
   }
-  return decoded.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+  return cleanMediaTitle(decoded);
+}
+
+function cleanMediaTitle(fileName) {
+  return (
+    String(fileName || "Uploaded media")
+      .replace(/\.[^.]+$/, "")
+      .replace(/[-_]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 90) || "Uploaded media"
+  );
+}
+
+function slugifyFileName(title) {
+  return (
+    String(title || "uploaded-media")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "uploaded-media"
+  );
 }
 
 function safelyDecodePath(path) {
@@ -601,7 +622,8 @@ async function routeApi(req, res, url) {
       return badRequest(res, "Choose an MP3, M4A, WAV, OGG, MP4, or WebM file.");
     }
 
-    const objectPath = `${room.code}/${randomUUID()}${extension}`;
+    const title = cleanMediaTitle(fileName);
+    const objectPath = `Library/${slugifyFileName(title)}-${randomUUID().slice(0, 8)}${extension}`;
     const publicBase = r2PublicBaseUrl;
     return sendJson(res, 200, {
       upload: {
@@ -609,7 +631,8 @@ async function routeApi(req, res, url) {
         url: await signR2Upload({ objectPath, contentType }),
         headers: { "content-type": contentType },
         objectPath,
-        publicUrl: `${publicBase}/${objectPath}`
+        publicUrl: `${publicBase}/${objectPath.split("/").map(awsEncode).join("/")}`,
+        title
       }
     });
   }
