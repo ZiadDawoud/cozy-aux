@@ -171,6 +171,7 @@ function cleanMediaTitle(fileName) {
   return (
     String(fileName || "Uploaded media")
       .replace(/\.[^.]+$/, "")
+      .replace(/-(?:[a-f0-9]{8}|[a-f0-9]{32}|[a-f0-9-]{36})$/i, "")
       .replace(/[-_]+/g, " ")
       .replace(/\s+/g, " ")
       .trim()
