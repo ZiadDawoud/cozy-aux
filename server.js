@@ -5,6 +5,19 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import {
+  addFriendship,
+  areFriends,
+  createUser,
+  findUserById,
+  findUserByLookup,
+  findUserByToken,
+  initAuthStore,
+  inviteFriend,
+  invitedRoomSummaries,
+  loginUser,
+  userFriends
+} from "./auth-store.js";
 import { db, loadDb, saveDb } from "./db.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -53,81 +66,10 @@ function roomSnapshot(room) {
   };
 }
 
-function publicUser(user) {
-  if (!user) return null;
-  return {
-    id: user.id,
-    handle: user.handle,
-    displayName: user.displayName,
-    friendCode: user.friendCode,
-    createdAt: user.createdAt
-  };
-}
-
-function normalizeHandle(handle) {
-  return String(handle || "")
-    .trim()
-    .toLowerCase()
-    .replace(/^@/, "");
-}
-
-function makeFriendCode() {
-  let code = "";
-  do {
-    code = randomBytes(3).toString("hex").toUpperCase();
-  } while (db().users.some((user) => user.friendCode === code));
-  return code;
-}
-
-function findUserByToken(req) {
-  const token = req.headers["x-auth-token"];
-  if (!token) return null;
-  return db().users.find((user) => user.authToken === token) || null;
-}
-
-function requireUser(req, res) {
-  const user = findUserByToken(req);
+async function requireUser(req, res) {
+  const user = await findUserByToken(req.headers["x-auth-token"]);
   if (!user) badRequest(res, "Create or sign in to a profile first.", 401);
   return user;
-}
-
-function areFriends(userId, friendId) {
-  return db().friendships.some(
-    (friendship) =>
-      (friendship.userId === userId && friendship.friendId === friendId) ||
-      (friendship.userId === friendId && friendship.friendId === userId)
-  );
-}
-
-function userFriends(userId) {
-  return db()
-    .friendships.filter(
-      (friendship) => friendship.userId === userId || friendship.friendId === userId
-    )
-    .map((friendship) =>
-      publicUser(
-        db().users.find((user) =>
-          user.id === (friendship.userId === userId ? friendship.friendId : friendship.userId)
-        )
-      )
-    )
-    .filter(Boolean);
-}
-
-function invitedRoomSummaries(userId) {
-  return db()
-    .invites.filter((invite) => invite.toUserId === userId && !invite.dismissedAt)
-    .map((invite) => {
-      const room = db().rooms.find((savedRoom) => savedRoom.code === invite.roomCode);
-      const from = db().users.find((user) => user.id === invite.fromUserId);
-      if (!room || room.endedAt) return null;
-      return {
-        roomCode: room.code,
-        invitedAt: invite.createdAt,
-        from: publicUser(from)
-      };
-    })
-    .filter(Boolean);
 }
 
 function sendJson(res, status, body) {
@@ -529,63 +471,50 @@ async function routeApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/users") {
     const body = await readJson(req);
     const displayName = String(body.displayName || "").trim().slice(0, 40);
-    const handle = normalizeHandle(body.handle || displayName);
-    if (!displayName) return badRequest(res, "Choose a display name.");
-    if (!/^[a-z0-9_]{3,24}$/.test(handle)) {
-      return badRequest(res, "Handle must be 3-24 characters using letters, numbers, or underscores.");
+    const username = String(body.username || body.handle || "").trim();
+    try {
+      return sendJson(res, 201, await createUser({ displayName, username, password: body.password }));
+    } catch (error) {
+      return badRequest(res, error.message);
     }
-    if (db().users.some((user) => user.handle === handle)) {
-      return badRequest(res, "That handle is already taken.");
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/login") {
+    const body = await readJson(req);
+    try {
+      return sendJson(res, 200, await loginUser({ username: body.username || body.handle, password: body.password }));
+    } catch (error) {
+      return badRequest(res, error.message, 401);
     }
-    const now = Date.now();
-    const user = {
-      id: randomUUID(),
-      authToken: randomBytes(24).toString("hex"),
-      displayName,
-      handle,
-      friendCode: makeFriendCode(),
-      createdAt: now
-    };
-    db().users.push(user);
-    await saveDb();
-    return sendJson(res, 201, { user: publicUser(user), authToken: user.authToken });
   }
 
   if (req.method === "GET" && url.pathname === "/api/me") {
-    const user = findUserByToken(req);
+    const user = await findUserByToken(req.headers["x-auth-token"]);
     if (!user) return sendJson(res, 200, { user: null, friends: [], invites: [], rooms: [] });
     const ownedActiveRooms = db()
       .rooms.filter((room) => !room.endedAt && room.ownerUserId === user.id)
       .map((room) => ({ code: room.code, createdAt: room.createdAt }));
     return sendJson(res, 200, {
-      user: publicUser(user),
-      friends: userFriends(user.id),
-      invites: invitedRoomSummaries(user.id),
+      user,
+      friends: await userFriends(user.id),
+      invites: await invitedRoomSummaries(user.id, db().rooms),
       rooms: ownedActiveRooms
     });
   }
 
   if (req.method === "POST" && url.pathname === "/api/friends") {
-    const user = requireUser(req, res);
+    const user = await requireUser(req, res);
     if (!user) return;
     const body = await readJson(req);
     const lookup = String(body.lookup || "").trim();
-    const normalized = normalizeHandle(lookup);
-    const friend = db().users.find(
-      (candidate) =>
-        candidate.id !== user.id &&
-        (candidate.handle === normalized || candidate.friendCode === lookup.toUpperCase())
-    );
+    const friend = await findUserByLookup(lookup, user.id);
     if (!friend) return badRequest(res, "No profile found with that handle or friend code.", 404);
-    if (!areFriends(user.id, friend.id)) {
-      db().friendships.push({ userId: user.id, friendId: friend.id, createdAt: Date.now() });
-      await saveDb();
-    }
-    return sendJson(res, 200, { friends: userFriends(user.id) });
+    await addFriendship(user.id, friend.id);
+    return sendJson(res, 200, { friends: await userFriends(user.id) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/rooms") {
-    const user = requireUser(req, res);
+    const user = await requireUser(req, res);
     if (!user) return;
     const body = await readJson(req);
     const participantId = body.participantId || randomUUID();
@@ -650,7 +579,7 @@ async function routeApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/storage/upload-url") {
     if (!storageConfigured()) return badRequest(res, "Add Cloudflare R2 environment variables first.", 501);
-    const user = requireUser(req, res);
+    const user = await requireUser(req, res);
     if (!user) return;
     const body = await readJson(req);
     const room = getRoom(body.roomCode);
@@ -689,7 +618,7 @@ async function routeApi(req, res, url) {
   if (req.method === "POST" && joinMatch) {
     const room = getRoom(joinMatch[1]);
     if (!room || room.endedAt) return badRequest(res, "Room not found.", 404);
-    const user = requireUser(req, res);
+    const user = await requireUser(req, res);
     if (!user) return;
     const body = await readJson(req);
     const participantId = body.participantId || randomUUID();
@@ -721,35 +650,23 @@ async function routeApi(req, res, url) {
   if (req.method === "POST" && inviteMatch) {
     const room = getRoom(inviteMatch[1]);
     if (!room || room.endedAt) return badRequest(res, "Room not found.", 404);
-    const user = requireUser(req, res);
+    const user = await requireUser(req, res);
     if (!user) return;
     if (room.ownerUserId !== user.id) return badRequest(res, "Only the room owner can invite friends.", 403);
     const body = await readJson(req);
-    const friend = db().users.find((candidate) => candidate.id === body.friendId);
-    if (!friend || !areFriends(user.id, friend.id)) {
+    const friend = await findUserById(body.friendId);
+    if (!friend || !(await areFriends(user.id, friend.id))) {
       return badRequest(res, "That person is not in your friends list.", 403);
     }
-    const alreadyInvited = db().invites.some(
-      (invite) => invite.roomCode === room.code && invite.toUserId === friend.id && !invite.dismissedAt
-    );
-    if (!alreadyInvited) {
-      db().invites.push({
-        id: randomUUID(),
-        roomCode: room.code,
-        fromUserId: user.id,
-        toUserId: friend.id,
-        createdAt: Date.now()
-      });
-      await saveDb();
-    }
-    return sendJson(res, 200, { invites: invitedRoomSummaries(friend.id) });
+    await inviteFriend({ roomCode: room.code, fromUserId: user.id, toUserId: friend.id });
+    return sendJson(res, 200, { invites: await invitedRoomSummaries(friend.id, db().rooms) });
   }
 
   const endRoomMatch = url.pathname.match(/^\/api\/rooms\/([A-F0-9]{6})\/end$/);
   if (req.method === "POST" && endRoomMatch) {
     const room = getRoom(endRoomMatch[1]);
     if (!room || room.endedAt) return badRequest(res, "Room not found.", 404);
-    const user = requireUser(req, res);
+    const user = await requireUser(req, res);
     if (!user) return;
     if (room.ownerUserId !== user.id) return badRequest(res, "Only the room owner can end this room.", 403);
     room.endedAt = Date.now();
@@ -1004,6 +921,7 @@ server.on("error", (error) => {
 });
 
 await loadDb();
+await initAuthStore();
 for (const record of db().rooms.filter((room) => !room.endedAt)) {
   rooms.set(record.code, runtimeRoomFromRecord(record));
 }

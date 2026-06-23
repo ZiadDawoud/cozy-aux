@@ -18,10 +18,16 @@ const els = {
   profileForm: $("#profileForm"),
   profileName: $("#profileName"),
   profileHandle: $("#profileHandle"),
+  profilePassword: $("#profilePassword"),
+  loginForm: $("#loginForm"),
+  loginUsername: $("#loginUsername"),
+  loginPassword: $("#loginPassword"),
   profileStatus: $("#profileStatus"),
   profileCard: $("#profileCard"),
   profileDisplayName: $("#profileDisplayName"),
   profileHandleText: $("#profileHandleText"),
+  inboxMenu: $("#inboxMenu"),
+  inboxCount: $("#inboxCount"),
   copyFriendCodeButton: $("#copyFriendCodeButton"),
   friendForm: $("#friendForm"),
   friendLookup: $("#friendLookup"),
@@ -591,12 +597,14 @@ async function uploadToR2(file) {
 
 function renderAccount() {
   const user = state.account;
-  els.profileStatus.textContent = user ? "Saved" : "Not set";
+  els.profileStatus.textContent = user ? "Logged in" : "Not signed in";
   els.profileForm.classList.toggle("hidden", Boolean(user));
+  els.loginForm.classList.toggle("hidden", Boolean(user));
   els.profileCard.classList.toggle("hidden", !user);
+  els.inboxMenu.classList.toggle("hidden", !user);
   if (user) {
     els.profileDisplayName.textContent = user.displayName;
-    els.profileHandleText.textContent = `@${user.handle} · friend code ${user.friendCode}`;
+    els.profileHandleText.textContent = `@${user.username || user.handle} · friend code ${user.friendCode}`;
   }
 
   els.friendCount.textContent = String(state.friends.length);
@@ -619,7 +627,13 @@ function renderAccount() {
     }
   }
 
+  els.inboxCount.textContent = String(state.invites.length);
   els.inviteList.innerHTML = "";
+  if (!user) {
+    els.inviteList.innerHTML = `<div class="list-row empty">Log in to see room invites.</div>`;
+  } else if (!state.invites.length) {
+    els.inviteList.innerHTML = `<div class="list-row empty">No room invites.</div>`;
+  }
   for (const invite of state.invites) {
     const row = document.createElement("div");
     row.className = "list-row";
@@ -642,11 +656,12 @@ function renderAccount() {
 async function createProfile(event) {
   event.preventDefault();
   const displayName = els.profileName.value.trim();
-  const handle = els.profileHandle.value.trim();
+  const username = els.profileHandle.value.trim();
+  const password = els.profilePassword.value;
   try {
     const data = await api("/api/users", {
       method: "POST",
-      body: JSON.stringify({ displayName, handle })
+      body: JSON.stringify({ displayName, username, password })
     });
     localStorage.setItem("cozyAuxAuthToken", data.authToken);
     state.account = data.user;
@@ -655,7 +670,31 @@ async function createProfile(event) {
     els.createName.value = state.name;
     els.joinName.value = state.name;
     await loadAccount();
-    setMessage("Profile created.");
+    els.profilePassword.value = "";
+    setMessage("Account created.");
+  } catch (error) {
+    setMessage(error.message);
+  }
+}
+
+async function login(event) {
+  event.preventDefault();
+  const username = els.loginUsername.value.trim();
+  const password = els.loginPassword.value;
+  try {
+    const data = await api("/api/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    });
+    localStorage.setItem("cozyAuxAuthToken", data.authToken);
+    state.account = data.user;
+    state.name = data.user.displayName;
+    localStorage.setItem("cozyAuxName", state.name);
+    els.createName.value = state.name;
+    els.joinName.value = state.name;
+    els.loginPassword.value = "";
+    await loadAccount();
+    setMessage("Logged in.");
   } catch (error) {
     setMessage(error.message);
   }
@@ -1181,7 +1220,7 @@ async function restoreRoomFromUrl(params) {
   const participantFromUrl = params.get("participant");
   if (forceJoin) {
     state.participantId = resetTabParticipantId();
-    els.joinName.value = "";
+    els.joinName.value = state.name || "";
   } else if (participantFromUrl) {
     state.participantId = participantFromUrl;
     window.name = `cozyAux:${participantFromUrl}`;
@@ -1217,6 +1256,7 @@ els.joinName.value = state.name;
 els.profileName.value = state.name;
 els.profileHandle.value = state.name.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 24);
 els.profileForm.addEventListener("submit", createProfile);
+els.loginForm.addEventListener("submit", login);
 els.friendForm.addEventListener("submit", addFriend);
 els.copyFriendCodeButton.addEventListener("click", async () => {
   if (!state.account) return;

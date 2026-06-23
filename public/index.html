@@ -31,10 +31,25 @@
                 <input id="profileName" autocomplete="name" placeholder="Ziad" />
               </label>
               <label>
-                Handle
+                Username
                 <input id="profileHandle" autocomplete="username" placeholder="ziad" />
               </label>
-              <button type="submit">Create profile</button>
+              <label>
+                Password
+                <input id="profilePassword" autocomplete="new-password" minlength="8" type="password" />
+              </label>
+              <button type="submit">Create account</button>
+            </form>
+            <form id="loginForm" class="profile-form">
+              <label>
+                Username
+                <input id="loginUsername" autocomplete="username" placeholder="ziad" />
+              </label>
+              <label>
+                Password
+                <input id="loginPassword" autocomplete="current-password" type="password" />
+              </label>
+              <button type="submit">Log in</button>
             </form>
             <div id="profileCard" class="profile-card hidden">
               <div>
@@ -43,6 +58,13 @@
               </div>
               <button id="copyFriendCodeButton" class="secondary" type="button">Copy friend code</button>
             </div>
+            <details id="inboxMenu" class="inbox-menu">
+              <summary>
+                <span>Inbox</span>
+                <span id="inboxCount" class="status-pill">0</span>
+              </summary>
+              <div id="inviteList" class="stack-list"></div>
+            </details>
           </section>
 
           <section class="surface friends-surface">
@@ -55,7 +77,6 @@
               <button type="submit">Add</button>
             </form>
             <div id="friendsList" class="stack-list"></div>
-            <div id="inviteList" class="stack-list"></div>
           </section>
 
           <form id="createForm" class="surface">

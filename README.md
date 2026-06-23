@@ -4,7 +4,7 @@ A rough technical proof for private synchronized YouTube listening/watch rooms.
 
 ## What works
 
-- Simple browser-saved profiles with handles and friend codes.
+- Username/password accounts with cached browser sessions.
 - Create/join rooms with a 6-character code.
 - 2-3 participants per room.
 - Server-sent room updates.
@@ -20,7 +20,7 @@ A rough technical proof for private synchronized YouTube listening/watch rooms.
 - Video and audio-focus display modes.
 - Room chat.
 - Invite-link join flow.
-- Friends list and room invites.
+- Friends list and an inbox dropdown for room invites.
 - Persisted active rooms, chat, playback, participants, and aux holder.
 - Room owners can end rooms so they stop appearing as active.
 - Online/offline presence.
@@ -54,11 +54,16 @@ Recommended starter deploy:
   - `MAX_UPLOAD_BYTES=3221225472`
 - Optional environment variable for in-room search: `YOUTUBE_API_KEY=<your YouTube Data API key>`
 - Optional environment variable for localized search: `YOUTUBE_REGION_CODE=US`
+- Optional environment variables for Cloudflare D1 account storage:
+  - `CLOUDFLARE_ACCOUNT_ID=<your Cloudflare account ID>`
+  - `CLOUDFLARE_D1_DATABASE_ID=<your D1 database ID>`
+  - `CLOUDFLARE_D1_API_TOKEN=<API token with D1 edit/query access>`
 
-By default, the prototype stores data in `data/cozy-aux-db.json`. For a Render
-starter test, that is enough to verify the product flow, but Render's filesystem
-can be reset by redeploys or instance replacement. Before real users, replace the
-JSON store with Postgres or another managed database.
+By default, the prototype stores rooms in `data/cozy-aux-db.json`. Accounts,
+friends, sessions, and room invites use Cloudflare D1 when the D1 environment
+variables are set; otherwise they fall back to the JSON file for local testing.
+Render's filesystem can be reset by redeploys or instance replacement, so use D1
+before testing accounts with friends.
 
 Static hosts like GitHub Pages, Tiiny Host, and S3 will serve the HTML/CSS/JS, but
 the room API and WebSocket routes will not work.
@@ -73,6 +78,18 @@ or a raw 11-character YouTube video ID.
 In-room search uses the official YouTube Data API. Create an API key in Google
 Cloud, enable YouTube Data API v3, and set `YOUTUBE_API_KEY` on the server. If
 the key is missing, paste-link loading still works.
+
+## Accounts And D1
+
+Create a Cloudflare D1 database and a Cloudflare API token that can query/edit
+that D1 database. Set the D1 environment variables above on Render, then redeploy.
+Cozy Aux creates the required tables on startup.
+
+Passwords are stored as salted hashes. The browser stores only the session token
+in `localStorage`, so users stay logged in until that token is cleared.
+
+Room records are still stored in the local JSON prototype database for now; D1 is
+used for users, sessions, friendships, and friend room invites.
 
 ## Cloudflare R2 Saved Media
 
@@ -121,7 +138,6 @@ Add CORS to the R2 bucket so browsers can upload and play media from your app:
 
 ## Prototype limits
 
-- Accounts are passwordless browser profiles using a saved token.
-- The JSON database is a prototype persistence layer, not a production database.
+- Room persistence is still a JSON prototype layer.
 - Sync uses authoritative room timestamps and player commands, but there is no advanced drift smoothing yet.
 - No queue, notifications, or real mobile app yet.
