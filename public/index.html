@@ -111,7 +111,19 @@
               </div>
               <div class="room-actions">
                 <button id="homeButton" class="secondary" type="button">Home</button>
-                <button id="copyCodeButton" class="secondary" type="button">Copy code</button>
+                <details class="people-menu room-people-menu">
+                  <summary>
+                    <span>People</span>
+                    <span id="auxLabel" class="status-pill">Aux: --</span>
+                  </summary>
+                  <div class="people-menu-body">
+                    <form id="friendInviteForm" class="friend-form">
+                      <select id="friendInviteSelect" aria-label="Friend to invite"></select>
+                      <button type="submit">Invite</button>
+                    </form>
+                    <div id="participants" class="participants"></div>
+                  </div>
+                </details>
                 <button id="copyInviteButton" class="secondary" type="button">Copy invite</button>
                 <button id="endRoomButton" class="secondary danger" type="button">End room</button>
               </div>
@@ -189,18 +201,6 @@
               </div>
             </div>
 
-            <div class="surface">
-              <div class="section-head">
-                <h2>People</h2>
-                <span id="auxLabel" class="status-pill">Aux: --</span>
-              </div>
-              <form id="friendInviteForm" class="friend-form">
-                <select id="friendInviteSelect" aria-label="Friend to invite"></select>
-                <button type="submit">Invite</button>
-              </form>
-              <div id="participants" class="participants"></div>
-            </div>
-
             <div class="surface chat-surface">
               <div class="section-head">
                 <h2>Chat</h2>
@@ -212,6 +212,7 @@
                 <button type="submit">Send</button>
               </form>
             </div>
+
           </section>
         </div>
 

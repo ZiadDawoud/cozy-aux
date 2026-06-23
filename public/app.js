@@ -42,7 +42,6 @@ const els = {
   connectionStatus: $("#connectionStatus"),
   roomCode: $("#roomCode"),
   homeButton: $("#homeButton"),
-  copyCodeButton: $("#copyCodeButton"),
   copyInviteButton: $("#copyInviteButton"),
   endRoomButton: $("#endRoomButton"),
   participants: $("#participants"),
@@ -821,9 +820,11 @@ async function submitUpload(event) {
       state.mediaLibrary = [media, ...state.mediaLibrary.filter((item) => item.path !== media.path)];
       updateUploadProgress({
         active: false,
-        loaded: file.size,
-        total: file.size,
-        status: "Upload complete"
+        loaded: 0,
+        total: 0,
+        startedAt: 0,
+        speedBytesPerSec: 0,
+        status: ""
       });
       render();
       await applyPlayback(null, state.room.playback);
@@ -1300,10 +1301,6 @@ els.copyInviteButton.addEventListener("click", async () => {
   const url = `${location.origin}/?room=${state.room.code}&join=1`;
   await navigator.clipboard.writeText(url);
   setMessage("Invite link copied.");
-});
-els.copyCodeButton.addEventListener("click", async () => {
-  await navigator.clipboard.writeText(state.room.code);
-  setMessage("Room code copied.");
 });
 els.playButton.addEventListener("click", () =>
   command("play", {

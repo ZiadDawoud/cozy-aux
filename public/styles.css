@@ -141,6 +141,32 @@ h2 {
   min-width: 112px;
 }
 
+.room-people-menu {
+  position: relative;
+  min-width: 220px;
+}
+
+.room-people-menu summary {
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #263a3a;
+  font-size: 1rem;
+}
+
+.room-people-menu .people-menu-body {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  width: min(360px, calc(100vw - 36px));
+  padding: 14px;
+  border: 1px solid rgba(246, 241, 232, 0.11);
+  border-radius: 8px;
+  background: #151919;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+}
+
 .eyebrow {
   margin-bottom: 8px;
   color: #8fbab4;
@@ -499,16 +525,51 @@ h2 {
   gap: 10px;
 }
 
+.people-menu {
+  align-content: start;
+}
+
+.people-menu summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  color: #f6f1e8;
+  cursor: pointer;
+  font-size: 1.28rem;
+  font-weight: 900;
+}
+
+.people-menu summary::marker {
+  color: #8fbab4;
+}
+
+.people-menu-body {
+  display: grid;
+  gap: 18px;
+  padding-top: 18px;
+}
+
+.people-menu:not([open]) {
+  gap: 0;
+}
+
 .chat-surface {
-  min-height: 320px;
+  min-height: 430px;
+  border-color: rgba(242, 200, 107, 0.28);
+}
+
+.chat-surface h2 {
+  font-size: 1.65rem;
 }
 
 .chat-messages {
   display: grid;
   align-content: start;
   gap: 10px;
-  min-height: 180px;
-  max-height: 280px;
+  min-height: 280px;
+  max-height: 420px;
   overflow-y: auto;
   padding-right: 4px;
 }
